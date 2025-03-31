@@ -1,11 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { hotels, parameters, users, getAvailableLocations, getAvailableStaff } from '@/lib/data';
+import { getHotels } from '@/lib/db/hotels';
+import { getHotelLocations } from '@/lib/db/parameters-locations';
+import { getIncidentCategoryParameters } from '@/lib/db/parameters-incident-categories';
+import { getImpactParameters } from '@/lib/db/parameters-impact';
+import { getStatusParameters } from '@/lib/db/parameters-status';
+import { getBookingOriginParameters } from '@/lib/db/parameters-booking-origin';
 import { getCurrentUser } from '@/lib/auth';
+import { useToast } from '@/hooks/use-toast';
 
 interface IncidentEditProps {
   isOpen: boolean;
@@ -20,24 +26,88 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
   incident,
   onSave
 }) => {
-  const [formData, setFormData] = React.useState({
-    ...incident,
-    resolutionDescription: incident.resolutionDescription || ''
-  });
-
+  const [formData, setFormData] = useState({ ...incident });
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [impacts, setImpacts] = useState<any[]>([]);
+  const [statuses, setStatuses] = useState<any[]>([]);
+  const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+  const { toast } = useToast();
   const currentUser = getCurrentUser();
 
-  // Get available locations based on selected hotel
-  const availableLocations = formData.hotelId ? getAvailableLocations(formData.hotelId) : [];
-  
-  // Get available staff based on selected hotel
-  const availableStaff = formData.hotelId ? getAvailableStaff(formData.hotelId) : [];
+  // Load all data on mount
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        
+        // Load hotels
+        const hotelsData = await getHotels();
+        setHotels(hotelsData);
+        
+        // Load categories
+        const categoriesData = await getIncidentCategoryParameters();
+        setCategories(categoriesData);
+        
+        // Load impacts
+        const impactsData = await getImpactParameters();
+        setImpacts(impactsData);
+        
+        // Load statuses
+        const statusesData = await getStatusParameters();
+        setStatuses(statusesData);
+        
+        // Load booking origins
+        const bookingOriginsData = await getBookingOriginParameters();
+        setBookingOrigins(bookingOriginsData);
+        
+        // Load locations for the current hotel
+        if (incident.hotelId) {
+          const locationsData = await getHotelLocations(incident.hotelId);
+          setLocations(locationsData);
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les données",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, [incident.hotelId]);
 
-  // Extract parameters by type
-  const categoryParams = parameters.filter(p => p.type === 'incident_category');
-  const impactParams = parameters.filter(p => p.type === 'impact');
-  const originParams = parameters.filter(p => p.type === 'booking_origin');
-  const statusParams = parameters.filter(p => p.type === 'status');
+  // Load locations when hotel changes
+  useEffect(() => {
+    const loadLocations = async () => {
+      if (!formData.hotelId) {
+        setLocations([]);
+        return;
+      }
+
+      try {
+        setLoadingLocations(true);
+        const locationsData = await getHotelLocations(formData.hotelId);
+        setLocations(locationsData);
+      } catch (error) {
+        console.error('Error loading locations:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les lieux",
+          variant: "destructive",
+        });
+      } finally {
+        setLoadingLocations(false);
+      }
+    };
+    loadLocations();
+  }, [formData.hotelId]);
 
   // Handle form input changes
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -56,10 +126,25 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
     }));
   };
 
-  // Handle form submission
-  const handleSubmit = () => {
-    onSave(formData);
-  };
+  // Filter hotels based on user role
+  const filteredHotels = currentUser?.role === 'admin' 
+    ? hotels 
+    : hotels.filter(hotel => currentUser?.hotels.includes(hotel.id));
+
+  if (loading) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Chargement...</DialogTitle>
+          </DialogHeader>
+          <div className="py-6">
+            <p>Chargement des données en cours...</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -107,17 +192,9 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   <SelectValue placeholder="Sélectionnez un hôtel" />
                 </SelectTrigger>
                 <SelectContent>
-                  {currentUser?.role === 'admin' ? (
-                    hotels.map(hotel => (
-                      <SelectItem key={hotel.id} value={hotel.id}>{hotel.name}</SelectItem>
-                    ))
-                  ) : (
-                    hotels
-                      .filter(hotel => currentUser?.hotels.includes(hotel.id))
-                      .map(hotel => (
-                        <SelectItem key={hotel.id} value={hotel.id}>{hotel.name}</SelectItem>
-                      ))
-                  )}
+                  {filteredHotels.map(hotel => (
+                    <SelectItem key={hotel.id} value={hotel.id}>{hotel.name}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -127,15 +204,27 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
               <Select 
                 value={formData.locationId} 
                 onValueChange={(value) => handleSelectChange('locationId', value)}
-                disabled={!formData.hotelId}
+                disabled={!formData.hotelId || loadingLocations}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={formData.hotelId ? "Sélectionnez un lieu" : "Sélectionnez d'abord un hôtel"} />
+                  <SelectValue placeholder={
+                    !formData.hotelId 
+                      ? "Sélectionnez d'abord un hôtel" 
+                      : loadingLocations 
+                        ? "Chargement..." 
+                        : "Sélectionnez un lieu"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableLocations.map(location => (
-                    <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
-                  ))}
+                  {loadingLocations ? (
+                    <SelectItem value="loading" disabled>Chargement...</SelectItem>
+                  ) : locations.length === 0 ? (
+                    <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
+                  ) : (
+                    locations.map(location => (
+                      <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -152,7 +241,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   <SelectValue placeholder="Sélectionnez une catégorie" />
                 </SelectTrigger>
                 <SelectContent>
-                  {categoryParams.map(category => (
+                  {categories.map(category => (
                     <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
                   ))}
                 </SelectContent>
@@ -169,7 +258,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   <SelectValue placeholder="Sélectionnez un impact" />
                 </SelectTrigger>
                 <SelectContent>
-                  {impactParams.map(impact => (
+                  {impacts.map(impact => (
                     <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
                   ))}
                 </SelectContent>
@@ -195,7 +284,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
               name="resolutionDescription"
               className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               placeholder="Description de la résolution (optionnel)"
-              value={formData.resolutionDescription}
+              value={formData.resolutionDescription || ''}
               onChange={handleFormChange}
             />
           </div>
@@ -203,57 +292,30 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="receivedById">Reçu par</Label>
-              <Select 
-                value={formData.receivedById} 
-                onValueChange={(value) => handleSelectChange('receivedById', value)}
-                disabled={!formData.hotelId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={formData.hotelId ? "Sélectionnez un utilisateur" : "Sélectionnez d'abord un hôtel"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableStaff.map(user => (
-                    <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input
+                id="receivedById"
+                name="receivedById"
+                value={currentUser?.name || ''}
+                disabled
+              />
             </div>
             
             <div className="space-y-2">
-              <Label htmlFor="concludedById">Clôturé par</Label>
+              <Label htmlFor="statusId">Statut</Label>
               <Select 
-                value={formData.concludedById || "none"} 
-                onValueChange={(value) => handleSelectChange('concludedById', value === "none" ? null : value)}
-                disabled={!formData.hotelId}
+                value={formData.statusId} 
+                onValueChange={(value) => handleSelectChange('statusId', value)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={formData.hotelId ? "Sélectionnez un utilisateur" : "Sélectionnez d'abord un hôtel"} />
+                  <SelectValue placeholder="Sélectionnez un statut" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Non spécifié</SelectItem>
-                  {availableStaff.map(user => (
-                    <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                  {statuses.map(status => (
+                    <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-          </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="statusId">Statut</Label>
-            <Select 
-              value={formData.statusId} 
-              onValueChange={(value) => handleSelectChange('statusId', value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Sélectionnez un statut" />
-              </SelectTrigger>
-              <SelectContent>
-                {statusParams.map(status => (
-                  <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
           
           <div className="space-y-4 border-t pt-4">
@@ -265,7 +327,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                 <Input
                   id="clientName"
                   name="clientName"
-                  value={formData.clientName}
+                  value={formData.clientName || ''}
                   onChange={handleFormChange}
                 />
               </div>
@@ -276,7 +338,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   id="clientEmail"
                   name="clientEmail"
                   type="email"
-                  value={formData.clientEmail}
+                  value={formData.clientEmail || ''}
                   onChange={handleFormChange}
                 />
               </div>
@@ -288,7 +350,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                 id="clientPhone"
                 name="clientPhone"
                 type="tel"
-                value={formData.clientPhone}
+                value={formData.clientPhone || ''}
                 onChange={handleFormChange}
               />
             </div>
@@ -300,7 +362,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   id="arrivalDate"
                   name="arrivalDate"
                   type="date"
-                  value={formData.arrivalDate}
+                  value={formData.arrivalDate || ''}
                   onChange={handleFormChange}
                 />
               </div>
@@ -311,7 +373,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   id="departureDate"
                   name="departureDate"
                   type="date"
-                  value={formData.departureDate}
+                  value={formData.departureDate || ''}
                   onChange={handleFormChange}
                 />
               </div>
@@ -325,7 +387,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   name="reservationAmount"
                   type="number"
                   placeholder="0.00"
-                  value={formData.reservationAmount}
+                  value={formData.reservationAmount || ''}
                   onChange={handleFormChange}
                 />
               </div>
@@ -341,7 +403,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Non spécifié</SelectItem>
-                    {originParams.map(origin => (
+                    {bookingOrigins.map(origin => (
                       <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -355,7 +417,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
           <Button variant="outline" onClick={onClose}>
             Annuler
           </Button>
-          <Button type="submit" onClick={handleSubmit}>
+          <Button onClick={() => onSave(formData)}>
             Enregistrer les modifications
           </Button>
         </DialogFooter>

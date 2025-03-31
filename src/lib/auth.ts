@@ -21,9 +21,38 @@ export type AuthUser = {
 // Store the current user
 let currentUser: AuthUser | null = null;
 
+// Test user credentials
+const TEST_USERS = {
+  'yann@agence-creho.com': {
+    password: '123456',
+    data: {
+      id: '00000000-0000-0000-0000-000000000003',
+      name: 'Yann Test',
+      email: 'yann@agence-creho.com',
+      role: 'admin',
+      hotels: ['hotel1', 'hotel2', 'hotel3', 'hotel4'],
+      modules: ['mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'mod6', 'mod7', 'mod8', 'mod9', 'mod10', 'mod11'],
+      active: true
+    }
+  }
+};
+
 // Simple login function
 export const login = async (email: string, password: string): Promise<{ success: boolean; message?: string; user?: AuthUser }> => {
   try {
+    // Check for test user first
+    const testUser = TEST_USERS[email as keyof typeof TEST_USERS];
+    if (testUser && testUser.password === password) {
+      // Set the current user
+      currentUser = testUser.data;
+      
+      // Store the user in localStorage for persistence
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+      
+      return { success: true, user: currentUser };
+    }
+
+    // If not a test user, proceed with Firebase auth
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const firebaseUser = userCredential.user;
     
