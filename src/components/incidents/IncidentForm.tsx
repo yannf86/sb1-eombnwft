@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { getHotels } from '@/lib/db/hotels';
 import { getHotelLocations } from '@/lib/db/parameters-locations';
@@ -12,48 +13,93 @@ import { getImpactParameters } from '@/lib/db/parameters-impact';
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { getBookingOriginParameters } from '@/lib/db/parameters-booking-origin';
 import { getCurrentUser } from '@/lib/auth';
+import { getUsers } from '@/lib/db/users';
 import { useDate } from '@/hooks/use-date';
 import { useToast } from '@/hooks/use-toast';
+import { findStatusIdByCode } from '@/lib/db/parameters-status';
 
 interface IncidentFormProps {
   isOpen: boolean;
   onClose: () => void;
-  formData: any;
-  onFormChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void;
-  onSubmit: () => void;
+  incident?: any; // Optional incident data for edit mode
+  onSave: (formData: any) => void;
+  isEditing?: boolean;
 }
 
 const IncidentForm: React.FC<IncidentFormProps> = ({
   isOpen,
   onClose,
-  formData,
-  onFormChange,
-  onSubmit
+  incident,
+  onSave,
+  isEditing = false
 }) => {
   const currentUser = getCurrentUser();
   const { toast } = useToast();
-  const [hotels, setHotels] = React.useState<any[]>([]);
-  const [locations, setLocations] = React.useState<any[]>([]);
-  const [categories, setCategories] = React.useState<any[]>([]);
-  const [impacts, setImpacts] = React.useState<any[]>([]);
-  const [statuses, setStatuses] = React.useState<any[]>([]);
-  const [bookingOrigins, setBookingOrigins] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [loadingLocations, setLoadingLocations] = React.useState(false);
-  const [loadingCategories, setLoadingCategories] = React.useState(true);
-  const [loadingImpacts, setLoadingImpacts] = React.useState(true);
-  const [loadingStatuses, setLoadingStatuses] = React.useState(true);
-  const [loadingBookingOrigins, setLoadingBookingOrigins] = React.useState(true);
+  
+  // States for loading data
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [impacts, setImpacts] = useState<any[]>([]);
+  const [statuses, setStatuses] = useState<any[]>([]);
+  const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+
+  // Form data state
+  const [formData, setFormData] = useState<any>({
+    date: new Date().toISOString().split('T')[0],
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    hotelId: currentUser?.role === 'standard' && currentUser?.hotels?.length === 1 ? currentUser.hotels[0] : '',
+    locationId: '',
+    roomType: '',
+    clientName: '',
+    clientEmail: '',
+    clientPhone: '',
+    arrivalDate: '',
+    departureDate: '',
+    reservationAmount: '',
+    origin: '',
+    categoryId: '',
+    impactId: '',
+    description: '',
+    resolutionDescription: '',
+    statusId: '',
+    receivedById: currentUser?.id || '',
+    concludedById: null // Default to null which will display as "En Attente"
+  });
+
+  // Initialize form data with incident data if editing
+  useEffect(() => {
+    if (isEditing && incident) {
+      setFormData({
+        ...incident
+      });
+    } else {
+      // For new incidents, try to find the "open" status ID
+      const initializeDefaultStatus = async () => {
+        try {
+          const openStatusId = await findStatusIdByCode('open');
+          if (openStatusId) {
+            setFormData(prev => ({
+              ...prev,
+              statusId: openStatusId
+            }));
+          }
+        } catch (error) {
+          console.error('Error finding default status:', error);
+        }
+      };
+      initializeDefaultStatus();
+    }
+  }, [isEditing, incident]);
 
   // Load all data on mount
-  React.useEffect(() => {
+  useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true);
-        setLoadingCategories(true);
-        setLoadingImpacts(true);
-        setLoadingStatuses(true);
-        setLoadingBookingOrigins(true);
         
         // Load hotels
         const hotelsData = await getHotels();
@@ -74,6 +120,20 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         // Load booking origins
         const bookingOriginsData = await getBookingOriginParameters();
         setBookingOrigins(bookingOriginsData);
+        
+        // Load users for concludedById
+        const usersData = await getUsers();
+        // Filter out any potential "En Attente" entry from users
+        const filteredUsers = usersData.filter(user => 
+          user.name !== "En Attente" && user.name !== "En attente"
+        );
+        setUsers(filteredUsers);
+        
+        // Load locations for the current hotel (if editing)
+        if (isEditing && incident?.hotelId) {
+          const locationsData = await getHotelLocations(incident.hotelId);
+          setLocations(locationsData);
+        }
       } catch (error) {
         console.error('Error loading data:', error);
         toast({
@@ -83,17 +143,13 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         });
       } finally {
         setLoading(false);
-        setLoadingCategories(false);
-        setLoadingImpacts(false);
-        setLoadingStatuses(false);
-        setLoadingBookingOrigins(false);
       }
     };
     loadData();
-  }, []);
+  }, [isEditing, incident]);
 
   // Load locations when hotel changes
-  React.useEffect(() => {
+  useEffect(() => {
     const loadLocations = async () => {
       if (!formData.hotelId) {
         setLocations([]);
@@ -119,13 +175,14 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
   }, [formData.hotelId]);
 
   // Set receivedById to current user's ID if not already set
-  React.useEffect(() => {
+  useEffect(() => {
     if (currentUser && !formData.receivedById) {
-      onFormChange({
-        target: { name: 'receivedById', value: currentUser.id }
-      } as React.ChangeEvent<HTMLInputElement>);
+      setFormData(prev => ({
+        ...prev,
+        receivedById: currentUser.id
+      }));
     }
-  }, [currentUser, formData.receivedById, onFormChange]);
+  }, [currentUser, formData.receivedById]);
 
   // Use the date hook for incident date
   const incidentDate = useDate({
@@ -149,7 +206,24 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
   // Filter hotels based on user role
   const filteredHotels = currentUser?.role === 'admin' 
     ? hotels 
-    : hotels.filter(hotel => currentUser?.hotels.includes(hotel.id));
+    : hotels.filter(hotel => currentUser?.hotels?.includes(hotel.id));
+
+  // Handle form input changes
+  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  // Handle select changes
+  const handleSelectChange = (name: string, value: string | null) => {
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
 
   // Validate form before submission
   const validateForm = () => {
@@ -200,49 +274,82 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
       });
       return;
     }
-    onSubmit();
+
+    // Update form data with dates from hooks
+    const updatedFormData = {
+      ...formData,
+      date: incidentDate.date,
+      time: incidentDate.time,
+      arrivalDate: arrivalDate.date,
+      departureDate: departureDate.date
+    };
+
+    onSave(updatedFormData);
   };
 
   // Update form data when dates change
-  React.useEffect(() => {
-    onFormChange({ 
-      target: { name: 'date', value: incidentDate.date } 
-    } as React.ChangeEvent<HTMLInputElement>);
-    onFormChange({ 
-      target: { name: 'time', value: incidentDate.time } 
-    } as React.ChangeEvent<HTMLInputElement>);
+  useEffect(() => {
+    setFormData(prev => ({ 
+      ...prev, 
+      date: incidentDate.date,
+      time: incidentDate.time
+    }));
   }, [incidentDate.date, incidentDate.time]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (arrivalDate.date) {
-      onFormChange({ 
-        target: { name: 'arrivalDate', value: arrivalDate.date } 
-      } as React.ChangeEvent<HTMLInputElement>);
+      setFormData(prev => ({ 
+        ...prev, 
+        arrivalDate: arrivalDate.date 
+      }));
     }
   }, [arrivalDate.date]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (departureDate.date) {
-      onFormChange({ 
-        target: { name: 'departureDate', value: departureDate.date } 
-      } as React.ChangeEvent<HTMLInputElement>);
+      setFormData(prev => ({ 
+        ...prev, 
+        departureDate: departureDate.date 
+      }));
     }
   }, [departureDate.date]);
 
   // Reset locationId when hotel changes
-  React.useEffect(() => {
-    onFormChange({
-      target: { name: 'locationId', value: '' }
-    } as React.ChangeEvent<HTMLInputElement>);
-  }, [formData.hotelId]);
+  useEffect(() => {
+    if (!isEditing) {
+      setFormData(prev => ({
+        ...prev,
+        locationId: ''
+      }));
+    }
+  }, [formData.hotelId, isEditing]);
+
+  if (loading) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Chargement...</DialogTitle>
+          </DialogHeader>
+          <div className="py-6">
+            <p>Chargement des données en cours...</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Nouvel Incident</DialogTitle>
+          <DialogTitle>
+            {isEditing ? 'Modifier l\'incident' : 'Nouvel Incident'}
+          </DialogTitle>
           <DialogDescription>
-            Créez un nouvel incident
+            {isEditing 
+              ? 'Modifiez les informations de l\'incident' 
+              : 'Créez un nouvel incident'}
           </DialogDescription>
         </DialogHeader>
         
@@ -265,9 +372,7 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="hotelId" 
                 value={formData.hotelId} 
-                onValueChange={(value) => onFormChange({ 
-                  target: { name: 'hotelId', value } 
-                } as React.ChangeEvent<HTMLSelectElement>)}
+                onValueChange={(value) => handleSelectChange('hotelId', value)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez un hôtel" />
@@ -291,9 +396,7 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="locationId" 
                 value={formData.locationId} 
-                onValueChange={(value) => onFormChange({ 
-                  target: { name: 'locationId', value } 
-                } as React.ChangeEvent<HTMLSelectElement>)}
+                onValueChange={(value) => handleSelectChange('locationId', value)}
                 disabled={!formData.hotelId || loadingLocations}
               >
                 <SelectTrigger>
@@ -311,9 +414,11 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   ) : locations.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
                   ) : (
-                    locations.map(location => (
-                      <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
-                    ))
+                    locations
+                      .filter(location => location.id && location.id !== '')
+                      .map(location => (
+                        <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
+                      ))
                   )}
                 </SelectContent>
               </Select>
@@ -328,22 +433,20 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="categoryId" 
                 value={formData.categoryId} 
-                onValueChange={(value) => onFormChange({ 
-                  target: { name: 'categoryId', value } 
-                } as React.ChangeEvent<HTMLSelectElement>)}
+                onValueChange={(value) => handleSelectChange('categoryId', value)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez une catégorie" />
                 </SelectTrigger>
                 <SelectContent>
-                  {loadingCategories ? (
-                    <SelectItem value="loading" disabled>Chargement...</SelectItem>
-                  ) : categories.length === 0 ? (
+                  {categories.length === 0 ? (
                     <SelectItem value="none" disabled>Aucune catégorie disponible</SelectItem>
                   ) : (
-                    categories.map(category => (
-                      <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
-                    ))
+                    categories
+                      .filter(category => category.id && category.id !== '')
+                      .map(category => (
+                        <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                      ))
                   )}
                 </SelectContent>
               </Select>
@@ -356,22 +459,20 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="impactId" 
                 value={formData.impactId} 
-                onValueChange={(value) => onFormChange({ 
-                  target: { name: 'impactId', value } 
-                } as React.ChangeEvent<HTMLSelectElement>)}
+                onValueChange={(value) => handleSelectChange('impactId', value)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez un impact" />
                 </SelectTrigger>
                 <SelectContent>
-                  {loadingImpacts ? (
-                    <SelectItem value="loading" disabled>Chargement...</SelectItem>
-                  ) : impacts.length === 0 ? (
+                  {impacts.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun niveau d'impact disponible</SelectItem>
                   ) : (
-                    impacts.map(impact => (
-                      <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
-                    ))
+                    impacts
+                      .filter(impact => impact.id && impact.id !== '')
+                      .map(impact => (
+                        <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
+                      ))
                   )}
                 </SelectContent>
               </Select>
@@ -387,7 +488,7 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               name="description"
               className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               value={formData.description}
-              onChange={onFormChange}
+              onChange={handleFormChange}
             />
           </div>
 
@@ -398,8 +499,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               name="resolutionDescription"
               className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               placeholder="Description de la résolution (optionnel)"
-              value={formData.resolutionDescription}
-              onChange={onFormChange}
+              value={formData.resolutionDescription || ''}
+              onChange={handleFormChange}
             />
           </div>
           
@@ -417,28 +518,48 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
             </div>
             
             <div className="space-y-2">
+              <Label htmlFor="concludedById">Conclu par</Label>
+              <Select 
+                value={formData.concludedById || "none"} 
+                onValueChange={(value) => handleSelectChange('concludedById', value === "none" ? null : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionnez un utilisateur" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">En Attente</SelectItem>
+                  {users
+                    .filter(user => user.id && user.id !== '')
+                    .map(user => (
+                      <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
               <Label htmlFor="statusId" className="after:content-['*'] after:ml-0.5 after:text-red-500">
                 Statut
               </Label>
               <Select 
                 name="statusId" 
                 value={formData.statusId} 
-                onValueChange={(value) => onFormChange({ 
-                  target: { name: 'statusId', value } 
-                } as React.ChangeEvent<HTMLSelectElement>)}
+                onValueChange={(value) => handleSelectChange('statusId', value)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionnez un statut" />
+                  <SelectValue placeholder="Sélectionner un statut" />
                 </SelectTrigger>
                 <SelectContent>
-                  {loadingStatuses ? (
-                    <SelectItem value="loading" disabled>Chargement...</SelectItem>
-                  ) : statuses.length === 0 ? (
+                  {statuses.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun statut disponible</SelectItem>
                   ) : (
-                    statuses.map(status => (
-                      <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
-                    ))
+                    statuses
+                      .filter(status => status.id && status.id !== '')
+                      .map(status => (
+                        <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
+                      ))
                   )}
                 </SelectContent>
               </Select>
@@ -454,8 +575,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 <Input
                   id="clientName"
                   name="clientName"
-                  value={formData.clientName}
-                  onChange={onFormChange}
+                  value={formData.clientName || ''}
+                  onChange={handleFormChange}
                 />
               </div>
               
@@ -465,8 +586,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   id="clientEmail"
                   name="clientEmail"
                   type="email"
-                  value={formData.clientEmail}
-                  onChange={onFormChange}
+                  value={formData.clientEmail || ''}
+                  onChange={handleFormChange}
                 />
               </div>
             </div>
@@ -477,8 +598,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 id="clientPhone"
                 name="clientPhone"
                 type="tel"
-                value={formData.clientPhone}
-                onChange={onFormChange}
+                value={formData.clientPhone || ''}
+                onChange={handleFormChange}
               />
             </div>
             
@@ -511,8 +632,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   name="reservationAmount"
                   type="number"
                   placeholder="0.00"
-                  value={formData.reservationAmount}
-                  onChange={onFormChange}
+                  value={formData.reservationAmount || ''}
+                  onChange={handleFormChange}
                 />
               </div>
               
@@ -520,24 +641,19 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 <Label htmlFor="origin">Origine réservation</Label>
                 <Select 
                   name="origin" 
-                  value={formData.origin} 
-                  onValueChange={(value) => onFormChange({ 
-                    target: { name: 'origin', value } 
-                  } as React.ChangeEvent<HTMLSelectElement>)}
+                  value={formData.origin || "none"} 
+                  onValueChange={(value) => handleSelectChange('origin', value === "none" ? null : value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Sélectionnez une origine" />
                   </SelectTrigger>
                   <SelectContent>
-                    {loadingBookingOrigins ? (
-                      <SelectItem value="loading" disabled>Chargement...</SelectItem>
-                    ) : bookingOrigins.length === 0 ? (
-                      <SelectItem value="none" disabled>Aucune origine disponible</SelectItem>
-                    ) : (
-                      bookingOrigins.map(origin => (
+                    <SelectItem value="none">Non spécifié</SelectItem>
+                    {bookingOrigins
+                      .filter(origin => origin.id && origin.id !== '')
+                      .map(origin => (
                         <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
-                      ))
-                    )}
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -549,8 +665,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
           <Button variant="outline" onClick={onClose}>
             Annuler
           </Button>
-          <Button type="submit" onClick={handleSubmit}>
-            Créer l'incident
+          <Button onClick={handleSubmit}>
+            {isEditing ? 'Enregistrer les modifications' : 'Créer l\'incident'}
           </Button>
         </DialogFooter>
       </DialogContent>

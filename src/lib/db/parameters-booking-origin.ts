@@ -88,6 +88,38 @@ export const getBookingOriginLabel = async (id: string): Promise<string> => {
     if (docSnap.exists()) {
       return docSnap.data().label;
     }
+    
+    // Try fallback to parameters collection
+    const paramRef = doc(db, 'parameters', id);
+    const paramSnap = await getDoc(paramRef);
+    if (paramSnap.exists()) {
+      return paramSnap.data().label;
+    }
+    
+    return 'Inconnu';
+  } catch (error) {
+    console.error('Error getting booking origin label:', error);
+    return 'Inconnu';
+  }
+};
+
+// Alternative approach: Use parameters collection until migration is complete
+export const getBookingOriginLabelFallback = async (id: string): Promise<string> => {
+  try {
+    // Try from dedicated collection first
+    const docRef = doc(db, 'parameters_booking_origin', id);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().label;
+    }
+    
+    // Fallback to parameters collection
+    const paramRef = doc(db, 'parameters', id);
+    const paramSnap = await getDoc(paramRef);
+    if (paramSnap.exists()) {
+      return paramSnap.data().label;
+    }
+    
     return 'Inconnu';
   } catch (error) {
     console.error('Error getting booking origin label:', error);

@@ -7,14 +7,16 @@ import { getLocationLabel } from '@/lib/db/parameters-locations';
 import { getIncidentCategoryLabel } from '@/lib/db/parameters-incident-categories';
 import { getImpactLabel } from '@/lib/db/parameters-impact';
 import { getStatusLabel } from '@/lib/db/parameters-status';
-import { getUserName } from '@/lib/data';
+import { getUserName } from '@/lib/db/users';
+import { Edit, Eye } from 'lucide-react';
 
 interface IncidentListProps {
   incidents: any[];
   onViewIncident: (id: string) => void;
+  onEditIncident?: (id: string) => void;
 }
 
-const IncidentList: React.FC<IncidentListProps> = ({ incidents, onViewIncident }) => {
+const IncidentList: React.FC<IncidentListProps> = ({ incidents, onViewIncident, onEditIncident }) => {
   // State to store resolved labels
   const [resolvedLabels, setResolvedLabels] = useState<{[key: string]: {[key: string]: string}}>({});
 
@@ -51,6 +53,11 @@ const IncidentList: React.FC<IncidentListProps> = ({ incidents, onViewIncident }
         // Load status label
         if (incident.statusId) {
           newLabels[incident.id].statusLabel = await getStatusLabel(incident.statusId);
+        }
+
+        // Load receiver name
+        if (incident.receivedById) {
+          newLabels[incident.id].receivedByName = await getUserName(incident.receivedById);
         }
       }
 
@@ -104,7 +111,7 @@ const IncidentList: React.FC<IncidentListProps> = ({ incidents, onViewIncident }
                   </span>
                 </TableCell>
                 <TableCell>{incident.clientName || "-"}</TableCell>
-                <TableCell>{getUserName(incident.receivedById)}</TableCell>
+                <TableCell>{labels.receivedByName || 'Chargement...'}</TableCell>
                 <TableCell>
                   <span className={
                     incident.statusId === 'stat1' ? "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-yellow-50 text-yellow-600 border-yellow-300" :
@@ -117,13 +124,27 @@ const IncidentList: React.FC<IncidentListProps> = ({ incidents, onViewIncident }
                   </span>
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button 
-                    variant="ghost" 
-                    size="sm"
-                    onClick={() => onViewIncident(incident.id)}
-                  >
-                    Voir
-                  </Button>
+                  <div className="flex items-center justify-end space-x-1">
+                    {onEditIncident && (
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => onEditIncident(incident.id)}
+                        className="h-8 w-8 p-0"
+                        title="Modifier"
+                      >
+                        <Edit className="h-4 w-4 text-blue-500" />
+                      </Button>
+                    )}
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={() => onViewIncident(incident.id)}
+                    >
+                      <Eye className="h-4 w-4 mr-1" />
+                      Voir
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             );

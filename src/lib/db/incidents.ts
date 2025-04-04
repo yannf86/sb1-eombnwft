@@ -1,7 +1,8 @@
-import { collection, addDoc, getDocs, query, where, orderBy, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, deleteDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase';
 import type { Incident } from '../schema';
+import { getCurrentUser } from '../auth';
 
 // Get all incidents
 export const getIncidents = async (hotelId?: string) => {
@@ -17,6 +18,26 @@ export const getIncidents = async (hotelId?: string) => {
     })) as Incident[];
   } catch (error) {
     console.error('Error getting incidents:', error);
+    throw error;
+  }
+};
+
+// Get incident by ID
+export const getIncident = async (id: string) => {
+  try {
+    const docRef = doc(db, 'incidents', id);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      return null;
+    }
+    
+    return {
+      id: docSnap.id,
+      ...docSnap.data()
+    } as Incident;
+  } catch (error) {
+    console.error('Error getting incident:', error);
     throw error;
   }
 };
@@ -47,13 +68,25 @@ export const createIncident = async (data: any) => {
     // Extract file fields and preview data
     const { photo, photoPreview, document, documentName, ...incidentData } = data;
     
+    // Get current user
+    const currentUser = getCurrentUser();
+    
     // Create the incident payload
     const incidentPayload: any = {
       ...incidentData,
       concludedById: incidentData.concludedById || null,
       resolutionDescription: incidentData.resolutionDescription || null,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      createdBy: currentUser?.id || 'system',
+      updatedBy: currentUser?.id || 'system',
+      // Initialize history array
+      history: [{
+        timestamp: new Date().toISOString(),
+        userId: currentUser?.id || 'system',
+        action: 'create',
+        changes: { type: 'initial_creation' }
+      }]
     };
 
     // Upload photo if present
@@ -78,13 +111,86 @@ export const createIncident = async (data: any) => {
   }
 };
 
+// Track changes between old and new data
+const trackChanges = (oldData: any, newData: any) => {
+  const changes: Record<string, { old: any, new: any }> = {};
+  
+  // Compare each field in the new data with the old data
+  for (const [key, value] of Object.entries(newData)) {
+    // Skip history field, internal fields, and functions
+    if (key === 'history' || key === 'id' || key === 'createdAt' || key === 'updatedAt' || 
+        key === 'createdBy' || key === 'updatedBy' || typeof value === 'function') {
+      continue;
+    }
+    
+    // Check if the field exists in old data
+    if (key in oldData) {
+      // Check if the value is different
+      if (JSON.stringify(oldData[key]) !== JSON.stringify(value)) {
+        changes[key] = {
+          old: oldData[key],
+          new: value
+        };
+      }
+    } else if (value !== null && value !== undefined && value !== '') {
+      // New field with a value
+      changes[key] = {
+        old: null,
+        new: value
+      };
+    }
+  }
+  
+  return changes;
+};
+
 // Update incident
 export const updateIncident = async (id: string, data: Partial<Incident>) => {
   try {
+    // Get the current incident to track changes
     const docRef = doc(db, 'incidents', id);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error('Incident not found');
+    }
+    
+    const oldData = docSnap.data();
+    
+    // Get current user
+    const currentUser = getCurrentUser();
+    const userId = currentUser?.id || 'system';
+    
+    // Track what has changed
+    const changes = trackChanges(oldData, data);
+    
+    // Check if concludedById was set and set timestamp
+    let concludedAt = oldData.concludedAt;
+    if (data.concludedById && !oldData.concludedById) {
+      concludedAt = new Date().toISOString();
+    } else if (data.concludedById === null && oldData.concludedById) {
+      concludedAt = null;
+    }
+    
+    // Create a history entry
+    const historyEntry = {
+      timestamp: new Date().toISOString(),
+      userId,
+      action: 'update',
+      changes
+    };
+    
+    // Update the history array
+    const history = oldData.history || [];
+    history.push(historyEntry);
+    
+    // Update the document with new data and history
     await updateDoc(docRef, {
       ...data,
-      updatedAt: new Date().toISOString()
+      concludedAt,
+      updatedAt: new Date().toISOString(),
+      updatedBy: userId,
+      history
     });
   } catch (error) {
     console.error('Error updating incident:', error);
@@ -95,9 +201,57 @@ export const updateIncident = async (id: string, data: Partial<Incident>) => {
 // Delete incident
 export const deleteIncident = async (id: string) => {
   try {
-    await deleteDoc(doc(db, 'incidents', id));
+    // Get current user
+    const currentUser = getCurrentUser();
+    const userId = currentUser?.id || 'system';
+    
+    // Get the current incident
+    const docRef = doc(db, 'incidents', id);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error('Incident not found');
+    }
+    
+    const oldData = docSnap.data();
+    
+    // Add deletion to history
+    const historyEntry = {
+      timestamp: new Date().toISOString(),
+      userId,
+      action: 'delete',
+      changes: { type: 'deletion' }
+    };
+    
+    // Update history before deletion (for audit purposes)
+    const history = oldData.history || [];
+    history.push(historyEntry);
+    
+    await updateDoc(docRef, {
+      updatedAt: new Date().toISOString(),
+      updatedBy: userId,
+      history
+    });
+    
+    // Now delete the document
+    await deleteDoc(docRef);
   } catch (error) {
     console.error('Error deleting incident:', error);
+    throw error;
+  }
+};
+
+// Clear concludedBy field on an incident
+export const clearConcludedBy = async (id: string) => {
+  try {
+    const docRef = doc(db, 'incidents', id);
+    await updateDoc(docRef, {
+      concludedById: null,
+      concludedAt: null,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error clearing concludedBy field:', error);
     throw error;
   }
 };

@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, SlidersHorizontal, RefreshCw } from 'lucide-react';
+import { getHotels } from '@/lib/db/hotels';
+import { useToast } from '@/hooks/use-toast';
 
 interface SupplierFiltersProps {
   searchQuery: string;
@@ -23,6 +25,32 @@ const SupplierFilters: React.FC<SupplierFiltersProps> = ({
   onFiltersExpandedChange,
   onReset
 }) => {
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+
+  // Load hotels from Firebase
+  useEffect(() => {
+    const loadHotels = async () => {
+      try {
+        setLoading(true);
+        const hotelsData = await getHotels();
+        setHotels(hotelsData);
+      } catch (error) {
+        console.error('Error loading hotels:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger la liste des hôtels",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadHotels();
+  }, [toast]);
+
   return (
     <div className="flex flex-col space-y-2">
       <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">

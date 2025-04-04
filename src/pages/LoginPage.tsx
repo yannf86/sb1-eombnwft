@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building as Buildings, Lock } from 'lucide-react';
+import { Building as Buildings, Lock, Mail, Key, UserCircle, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { login, isAuthenticated } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const LoginPage = () => {
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
   
@@ -22,50 +25,44 @@ const LoginPage = () => {
   }, [navigate]);
   
   // Handle login form submission
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
     
-    // Demo login credentials
-    if (email === '') {
-      toast({
-        title: "Champ requis",
-        description: "Veuillez entrer une adresse e-mail",
-        variant: "destructive",
-      });
+    // Basic validation
+    if (username === '') {
+      setErrorMessage("Veuillez entrer un nom d'utilisateur");
       setLoading(false);
       return;
     }
     
-    // Perform login
-    const result = login(email, password);
+    if (email === '') {
+      setErrorMessage("Veuillez entrer une adresse e-mail");
+      setLoading(false);
+      return;
+    }
+    
+    if (password === '') {
+      setErrorMessage("Veuillez entrer un mot de passe");
+      setLoading(false);
+      return;
+    }
+    
+    // Perform login (passing username to validate it matches)
+    const result = await login(email, password, username);
     
     if (result.success) {
       toast({
         title: "Connexion réussie",
-        description: `Bienvenue, ${result.user?.name}`,
+        description: `Bienvenue, ${username}`,
       });
       navigate('/dashboard');
     } else {
-      toast({
-        title: "Erreur de connexion",
-        description: result.message || "Identifiants incorrects",
-        variant: "destructive",
-      });
+      setErrorMessage(result.message || "Identifiants incorrects");
     }
     
     setLoading(false);
-  };
-  
-  // Fill in demo credentials
-  const useDemoCredentials = (role: 'admin' | 'user') => {
-    if (role === 'admin') {
-      setEmail('admin@test.com');
-      setPassword('password');
-    } else {
-      setEmail('user@test.com');
-      setPassword('password');
-    }
   };
   
   return (
@@ -82,8 +79,33 @@ const LoginPage = () => {
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
+            {errorMessage && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{errorMessage}</AlertDescription>
+              </Alert>
+            )}
+          
             <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium">Adresse e-mail</label>
+              <div className="flex items-center">
+                <UserCircle className="h-4 w-4 text-muted-foreground mr-2" />
+                <label htmlFor="username" className="text-sm font-medium after:content-['*'] after:ml-0.5 after:text-red-500">Nom d'utilisateur</label>
+              </div>
+              <Input
+                id="username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Votre nom d'utilisateur"
+                className="w-full"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center">
+                <Mail className="h-4 w-4 text-muted-foreground mr-2" />
+                <label htmlFor="email" className="text-sm font-medium after:content-['*'] after:ml-0.5 after:text-red-500">Adresse e-mail</label>
+              </div>
               <Input
                 id="email"
                 type="email"
@@ -91,11 +113,25 @@ const LoginPage = () => {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="exemple@email.com"
                 className="w-full"
+                required
               />
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label htmlFor="password" className="text-sm font-medium">Mot de passe</label>
+                <div className="flex items-center">
+                  <Key className="h-4 w-4 text-muted-foreground mr-2" />
+                  <label htmlFor="password" className="text-sm font-medium after:content-['*'] after:ml-0.5 after:text-red-500">Mot de passe</label>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => toast({
+                    title: "Réinitialisation du mot de passe",
+                    description: "Veuillez contacter votre administrateur pour réinitialiser votre mot de passe.",
+                  })}
+                  className="text-xs text-brand-600 hover:underline"
+                >
+                  Mot de passe oublié ?
+                </button>
               </div>
               <Input
                 id="password"
@@ -104,6 +140,7 @@ const LoginPage = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 className="w-full"
+                required
               />
             </div>
           </CardContent>
@@ -115,30 +152,10 @@ const LoginPage = () => {
             >
               {loading ? 'Connexion en cours...' : 'Se connecter'}
             </Button>
-            <div className="flex flex-col space-y-2 w-full">
-              <p className="text-sm text-center text-charcoal-500 dark:text-cream-400">
-                Comptes de démonstration
+            <div className="mt-4 text-center">
+              <p className="text-sm text-muted-foreground">
+                Pour créer un compte, veuillez contacter un administrateur qui pourra créer votre compte depuis la section Utilisateurs.
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                <Button 
-                  type="button" 
-                  variant="outline"
-                  onClick={() => useDemoCredentials('admin')}
-                  className="text-xs"
-                >
-                  <Lock className="h-3.5 w-3.5 mr-1" />
-                  Compte Admin
-                </Button>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  onClick={() => useDemoCredentials('user')}
-                  className="text-xs"
-                >
-                  <Lock className="h-3.5 w-3.5 mr-1" />
-                  Compte Standard
-                </Button>
-              </div>
             </div>
           </CardFooter>
         </form>

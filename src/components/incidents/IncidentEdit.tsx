@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { getHotels } from '@/lib/db/hotels';
 import { getHotelLocations } from '@/lib/db/parameters-locations';
 import { getIncidentCategoryParameters } from '@/lib/db/parameters-incident-categories';
@@ -11,6 +12,7 @@ import { getImpactParameters } from '@/lib/db/parameters-impact';
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { getBookingOriginParameters } from '@/lib/db/parameters-booking-origin';
 import { getCurrentUser } from '@/lib/auth';
+import { getUsers } from '@/lib/db/users';
 import { useToast } from '@/hooks/use-toast';
 
 interface IncidentEditProps {
@@ -26,15 +28,21 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
   incident,
   onSave
 }) => {
-  const [formData, setFormData] = useState({ ...incident });
+  const [formData, setFormData] = useState<any>({
+    ...incident,
+    concludedById: incident.concludedById || null
+  });
+
   const [hotels, setHotels] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [impacts, setImpacts] = useState<any[]>([]);
   const [statuses, setStatuses] = useState<any[]>([]);
   const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(false);
+  
   const { toast } = useToast();
   const currentUser = getCurrentUser();
 
@@ -63,6 +71,14 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
         // Load booking origins
         const bookingOriginsData = await getBookingOriginParameters();
         setBookingOrigins(bookingOriginsData);
+        
+        // Load users
+        const usersData = await getUsers();
+        // Filter out any potential "En Attente" entry from users
+        const filteredUsers = usersData.filter(user => 
+          user.name !== "En Attente" && user.name !== "En attente"
+        );
+        setUsers(filteredUsers);
         
         // Load locations for the current hotel
         if (incident.hotelId) {
@@ -129,7 +145,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
   // Filter hotels based on user role
   const filteredHotels = currentUser?.role === 'admin' 
     ? hotels 
-    : hotels.filter(hotel => currentUser?.hotels.includes(hotel.id));
+    : hotels.filter(hotel => currentUser?.hotels?.includes(hotel.id));
 
   if (loading) {
     return (
@@ -148,7 +164,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Modifier l'incident</DialogTitle>
           <DialogDescription>
@@ -221,9 +237,11 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   ) : locations.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
                   ) : (
-                    locations.map(location => (
-                      <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
-                    ))
+                    locations
+                      .filter(location => location.id && location.id !== '')
+                      .map(location => (
+                        <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
+                      ))
                   )}
                 </SelectContent>
               </Select>
@@ -241,9 +259,11 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   <SelectValue placeholder="Sélectionnez une catégorie" />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map(category => (
-                    <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
-                  ))}
+                  {categories
+                    .filter(category => category.id && category.id !== '') // Filter out empty IDs
+                    .map(category => (
+                      <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -258,9 +278,11 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   <SelectValue placeholder="Sélectionnez un impact" />
                 </SelectTrigger>
                 <SelectContent>
-                  {impacts.map(impact => (
-                    <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
-                  ))}
+                  {impacts
+                    .filter(impact => impact.id && impact.id !== '') // Filter out empty IDs
+                    .map(impact => (
+                      <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -301,18 +323,42 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
             </div>
             
             <div className="space-y-2">
+              <Label htmlFor="concludedById">Conclu par</Label>
+              <Select 
+                value={formData.concludedById || "none"} 
+                onValueChange={(value) => handleSelectChange('concludedById', value === "none" ? null : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionnez un utilisateur" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">En Attente</SelectItem>
+                  {users
+                    .filter(user => user.id && user.id !== '')
+                    .map(user => (
+                      <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
               <Label htmlFor="statusId">Statut</Label>
               <Select 
                 value={formData.statusId} 
                 onValueChange={(value) => handleSelectChange('statusId', value)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionnez un statut" />
+                  <SelectValue placeholder="Sélectionner un statut" />
                 </SelectTrigger>
                 <SelectContent>
-                  {statuses.map(status => (
-                    <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
-                  ))}
+                  {statuses
+                    .filter(status => status.id && status.id !== '') // Filter out empty IDs
+                    .map(status => (
+                      <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -403,9 +449,11 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Non spécifié</SelectItem>
-                    {bookingOrigins.map(origin => (
-                      <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
-                    ))}
+                    {bookingOrigins
+                      .filter(origin => origin.id && origin.id !== '')
+                      .map(origin => (
+                        <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>

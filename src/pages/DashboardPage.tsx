@@ -43,11 +43,12 @@ import {
   BarChart as BarChartIcon,
   LineChart as LineChartIcon
 } from 'lucide-react';
-import { hotels, parameters } from '@/lib/data';
+import { parameters } from '@/lib/data';
 import { useGamification } from '@/components/gamification/GamificationContext';
 import { formatDate } from '@/lib/utils';
 import { getIncidents } from '@/lib/db/incidents';
 import { getMaintenanceRequests } from '@/lib/db/maintenance';
+import { getHotels } from '@/lib/db/hotels';
 import { useToast } from '@/hooks/use-toast';
 
 // Define chart colors
@@ -65,6 +66,7 @@ const DashboardPage = () => {
   const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
   const [qualityVisits, setQualityVisits] = useState<any[]>([]);
   const [lostItems, setLostItems] = useState<any[]>([]);
+  const [hotels, setHotels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Load data on mount and when filters change
@@ -72,6 +74,10 @@ const DashboardPage = () => {
     const loadData = async () => {
       try {
         setLoading(true);
+        
+        // Load hotels
+        const hotelsData = await getHotels();
+        setHotels(hotelsData);
         
         // Load incidents
         const incidentsData = await getIncidents(selectedHotel === 'all' ? undefined : selectedHotel);
@@ -99,7 +105,7 @@ const DashboardPage = () => {
     };
 
     loadData();
-  }, [selectedHotel]);
+  }, [selectedHotel, toast]);
   
   // Filter data based on selected period
   const filterByPeriod = (data: { date: string }[]) => {

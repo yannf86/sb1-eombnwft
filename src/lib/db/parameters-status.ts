@@ -94,3 +94,24 @@ export const getStatusLabel = async (id: string): Promise<string> => {
     return 'Inconnu';
   }
 };
+
+// Find status ID by code
+export const findStatusIdByCode = async (code: string): Promise<string | null> => {
+  try {
+    const q = query(
+      collection(db, 'parameters_status'),
+      where('code', '==', code),
+      where('active', '==', true)
+    );
+    
+    const querySnapshot = await getDocs(q);
+    if (querySnapshot.empty) {
+      return null;
+    }
+    
+    return querySnapshot.docs[0].id;
+  } catch (error) {
+    console.error('Error finding status by code:', error);
+    return null;
+  }
+};

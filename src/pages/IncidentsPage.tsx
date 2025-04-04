@@ -1,19 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { 
   AlertTriangle, 
-  Search, 
   Download, 
   Plus, 
-  RefreshCw,
-  SlidersHorizontal,
   FileText
 } from 'lucide-react';
 import { 
@@ -28,7 +19,7 @@ import { formatDate } from '@/lib/utils';
 import { exportIncidents } from '@/lib/exportUtils';
 import { exportIncidentsToPDF } from '@/lib/pdfUtils';
 import { useToast } from '@/hooks/use-toast';
-import { getIncidents, createIncident } from '@/lib/db/incidents';
+import { getIncidents, createIncident, updateIncident } from '@/lib/db/incidents';
 import { getCurrentUser } from '@/lib/auth';
 
 // Import components
@@ -36,6 +27,7 @@ import IncidentDialog from '@/components/incidents/IncidentDialog';
 import IncidentForm from '@/components/incidents/IncidentForm';
 import IncidentList from '@/components/incidents/IncidentList';
 import IncidentFilters from '@/components/incidents/IncidentFilters';
+import IncidentEdit from '@/components/incidents/IncidentEdit';
 
 const IncidentsPage = () => {
   const [selectedTab, setSelectedTab] = useState('list');
@@ -58,6 +50,7 @@ const IncidentsPage = () => {
   // Function to load incidents
   const loadIncidents = async () => {
     try {
+      setLoading(true);
       const data = await getIncidents();
       setIncidents(data);
     } catch (error) {
@@ -74,36 +67,14 @@ const IncidentsPage = () => {
   
   // New incident dialog
   const [newIncidentDialogOpen, setNewIncidentDialogOpen] = useState(false);
-  const [incidentFormData, setIncidentFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    hotelId: currentUser?.role === 'standard' && currentUser.hotels.length === 1 ? currentUser.hotels[0] : '',
-    locationId: '',
-    roomType: '',
-    clientName: '',
-    clientEmail: '',
-    clientPhone: '',
-    arrivalDate: '',
-    departureDate: '',
-    reservationAmount: '',
-    origin: '',
-    categoryId: '',
-    impactId: '',
-    description: '',
-    resolutionDescription: '',
-    statusId: parameters.find(p => p.type === 'status' && p.code === 'open')?.id || '',
-    receivedById: currentUser?.id || '',
-    concludedById: '',
-    photo: undefined,
-    photoPreview: undefined,
-    document: undefined,
-    documentName: undefined
-  });
-  
+
   // View incident dialog
   const [viewIncidentDialogOpen, setViewIncidentDialogOpen] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState<any>(null);
   
+  // Edit incident dialog
+  const [editIncidentDialogOpen, setEditIncidentDialogOpen] = useState(false);
+
   // Filter incidents based on selected filters
   const filteredIncidents = incidents.filter(incident => {
     // Filter by hotel
@@ -132,20 +103,11 @@ const IncidentsPage = () => {
     return true;
   }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   
-  // Handle form input changes
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setIncidentFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-  };
-  
   // Handle form submission
-  const handleSubmitIncident = async () => {
+  const handleSubmitIncident = async (formData: any) => {
     try {
       // Create incident in Firebase
-      await createIncident(incidentFormData);
+      await createIncident(formData);
       
       toast({
         title: "Incident créé",
@@ -156,33 +118,6 @@ const IncidentsPage = () => {
       await loadIncidents();
       
       setNewIncidentDialogOpen(false);
-      
-      // Reset form
-      setIncidentFormData({
-        date: new Date().toISOString().split('T')[0],
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        hotelId: currentUser?.role === 'standard' && currentUser.hotels.length === 1 ? currentUser.hotels[0] : '',
-        locationId: '',
-        roomType: '',
-        clientName: '',
-        clientEmail: '',
-        clientPhone: '',
-        arrivalDate: '',
-        departureDate: '',
-        reservationAmount: '',
-        origin: '',
-        categoryId: '',
-        impactId: '',
-        description: '',
-        resolutionDescription: '',
-        statusId: parameters.find(p => p.type === 'status' && p.code === 'open')?.id || '',
-        receivedById: currentUser?.id || '',
-        concludedById: '',
-        photo: undefined,
-        photoPreview: undefined,
-        document: undefined,
-        documentName: undefined
-      });
     } catch (error) {
       console.error('Error creating incident:', error);
       toast({
@@ -253,10 +188,46 @@ const IncidentsPage = () => {
     }
   };
 
+  // Handle edit incident directly from list
+  const handleEditIncident = (incidentId: string) => {
+    const incident = incidents.find(inc => inc.id === incidentId);
+    if (incident) {
+      setSelectedIncident(incident);
+      setEditIncidentDialogOpen(true);
+    }
+  };
+
   // Handle incident update
   const handleIncidentUpdate = async () => {
     await loadIncidents(); // Reload incidents after update
     setViewIncidentDialogOpen(false);
+    setEditIncidentDialogOpen(false);
+  };
+  
+  // Handle save from edit form directly (not via view dialog)
+  const handleSaveEdit = async (updatedIncident: any) => {
+    try {
+      // Update incident in Firebase
+      await updateIncident(updatedIncident.id, updatedIncident);
+      
+      toast({
+        title: "Incident mis à jour",
+        description: "L'incident a été mis à jour avec succès",
+      });
+      
+      // Reload incidents
+      await loadIncidents();
+      
+      // Close edit dialog
+      setEditIncidentDialogOpen(false);
+    } catch (error) {
+      console.error('Error updating incident:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la mise à jour de l'incident",
+        variant: "destructive",
+      });
+    }
   };
 
   // Handle incident deletion
@@ -315,18 +286,20 @@ const IncidentsPage = () => {
           <IncidentList 
             incidents={filteredIncidents}
             onViewIncident={handleViewIncident}
+            onEditIncident={handleEditIncident}
           />
         </CardContent>
       </Card>
       
+      {/* New Incident Form */}
       <IncidentForm 
         isOpen={newIncidentDialogOpen}
         onClose={() => setNewIncidentDialogOpen(false)}
-        formData={incidentFormData}
-        onFormChange={handleFormChange}
-        onSubmit={handleSubmitIncident}
+        onSave={handleSubmitIncident}
+        isEditing={false}
       />
       
+      {/* View Incident Dialog */}
       <IncidentDialog 
         incident={selectedIncident}
         isOpen={viewIncidentDialogOpen}
@@ -334,6 +307,17 @@ const IncidentsPage = () => {
         onDelete={handleIncidentDelete}
         onUpdate={handleIncidentUpdate}
       />
+
+      {/* Edit Incident Dialog */}
+      {selectedIncident && (
+        <IncidentForm 
+          isOpen={editIncidentDialogOpen}
+          onClose={() => setEditIncidentDialogOpen(false)}
+          incident={selectedIncident}
+          onSave={handleSaveEdit}
+          isEditing={true}
+        />
+      )}
     </div>
   );
 };
