@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/utils';
 import { getHotelName, getParameterLabel, getUserName } from '@/lib/data';
 import { 
   Building, 
+  Phone, 
+  Mail, 
+  Globe, 
   MapPin, 
   User, 
   Image, 
@@ -14,10 +17,10 @@ import {
   CalendarRange,
   Check,
   X,
-  FileText
+  FileText,
+  Edit
 } from 'lucide-react';
 import { Maintenance } from './types/maintenance.types';
-import MaintenanceEdit from './MaintenanceEdit';
 import { useToast } from '@/hooks/use-toast';
 
 interface MaintenanceDialogProps {
@@ -25,45 +28,19 @@ interface MaintenanceDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onUpdate?: (updatedMaintenance: Maintenance) => void;
+  onEdit?: () => void;
 }
 
 const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({ 
   maintenance, 
   isOpen, 
   onClose,
-  onUpdate 
+  onUpdate,
+  onEdit
 }) => {
-  const [editMode, setEditMode] = useState(false);
   const { toast } = useToast();
 
   if (!maintenance) return null;
-
-  // Handle save changes
-  const handleSave = (updatedMaintenance: Maintenance) => {
-    // Here you would normally send the updated data to your backend
-    toast({
-      title: "Intervention mise à jour",
-      description: "Les modifications ont été enregistrées avec succès",
-    });
-    
-    // Call onUpdate if provided
-    if (onUpdate) {
-      onUpdate(updatedMaintenance);
-    }
-    
-    setEditMode(false);
-  };
-
-  if (editMode) {
-    return (
-      <MaintenanceEdit 
-        isOpen={isOpen}
-        onClose={() => setEditMode(false)}
-        maintenance={maintenance}
-        onSave={handleSave}
-      />
-    );
-  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -311,6 +288,16 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                 )}
               </div>
             )}
+            
+            {/* Comments section */}
+            {maintenance.comments && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-muted-foreground">Commentaires</p>
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-md p-4">
+                  <p className="whitespace-pre-wrap">{maintenance.comments}</p>
+                </div>
+              </div>
+            )}
           </div>
           
           {/* Metadata */}
@@ -332,7 +319,8 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
           <Button variant="outline" onClick={onClose}>
             Fermer
           </Button>
-          <Button onClick={() => setEditMode(true)}>
+          <Button onClick={onEdit} className="flex items-center">
+            <Edit className="h-4 w-4 mr-2" />
             Modifier
           </Button>
         </DialogFooter>

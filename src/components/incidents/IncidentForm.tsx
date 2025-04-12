@@ -13,7 +13,7 @@ import { getImpactParameters } from '@/lib/db/parameters-impact';
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { getBookingOriginParameters } from '@/lib/db/parameters-booking-origin';
 import { getCurrentUser } from '@/lib/auth';
-import { getUsers } from '@/lib/db/users';
+import { getUsers, getUsersByHotel } from '@/lib/db/users';
 import { useDate } from '@/hooks/use-date';
 import { useToast } from '@/hooks/use-toast';
 import { findStatusIdByCode } from '@/lib/db/parameters-status';
@@ -33,25 +33,10 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
   onSave,
   isEditing = false
 }) => {
-  const currentUser = getCurrentUser();
-  const { toast } = useToast();
-  
-  // States for loading data
-  const [hotels, setHotels] = useState<any[]>([]);
-  const [locations, setLocations] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [impacts, setImpacts] = useState<any[]>([]);
-  const [statuses, setStatuses] = useState<any[]>([]);
-  const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingLocations, setLoadingLocations] = useState(false);
-
-  // Form data state
   const [formData, setFormData] = useState<any>({
     date: new Date().toISOString().split('T')[0],
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    hotelId: currentUser?.role === 'standard' && currentUser?.hotels?.length === 1 ? currentUser.hotels[0] : '',
+    hotelId: '',
     locationId: '',
     roomType: '',
     clientName: '',
@@ -64,20 +49,35 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
     categoryId: '',
     impactId: '',
     description: '',
-    resolutionDescription: '',
     statusId: '',
-    receivedById: currentUser?.id || '',
-    concludedById: null // Default to null which will display as "En Attente"
+    receivedById: '',
+    concludedById: '',
+    resolutionDescription: ''
   });
+  
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [impacts, setImpacts] = useState<any[]>([]);
+  const [statuses, setStatuses] = useState<any[]>([]);
+  const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [filteredUsers, setFilteredUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  
+  const { toast } = useToast();
+  const currentUser = getCurrentUser();
 
-  // Initialize form data with incident data if editing
+  // Initialiser le formulaire avec les données de l'incident si en mode édition
   useEffect(() => {
     if (isEditing && incident) {
       setFormData({
         ...incident
       });
     } else {
-      // For new incidents, try to find the "open" status ID
+      // Pour un nouvel incident, on essaie de trouver le statut "ouvert" par défaut
       const initializeDefaultStatus = async () => {
         try {
           const openStatusId = await findStatusIdByCode('open');
@@ -121,15 +121,18 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         const bookingOriginsData = await getBookingOriginParameters();
         setBookingOrigins(bookingOriginsData);
         
-        // Load users for concludedById
-        const usersData = await getUsers();
-        // Filter out any potential "En Attente" entry from users
-        const filteredUsers = usersData.filter(user => 
-          user.name !== "En Attente" && user.name !== "En attente"
-        );
-        setUsers(filteredUsers);
+        // Load all users for initial state
+        const allUsers = await getUsers();
+        setUsers(allUsers);
+        // Initially, filter users for the current hotel if editing
+        if (isEditing && incident?.hotelId) {
+          const hotelUsers = await getUsersByHotel(incident.hotelId);
+          setFilteredUsers(hotelUsers);
+        } else {
+          setFilteredUsers(allUsers);
+        }
         
-        // Load locations for the current hotel (if editing)
+        // Load locations for the current hotel if editing
         if (isEditing && incident?.hotelId) {
           const locationsData = await getHotelLocations(incident.hotelId);
           setLocations(locationsData);
@@ -145,8 +148,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         setLoading(false);
       }
     };
+    
     loadData();
-  }, [isEditing, incident]);
+  }, [isEditing, incident, toast]);
 
   // Load locations when hotel changes
   useEffect(() => {
@@ -171,18 +175,50 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         setLoadingLocations(false);
       }
     };
+
     loadLocations();
-  }, [formData.hotelId]);
+  }, [formData.hotelId, toast]);
+
+  // Load users filtered by hotel when hotel selection changes
+  useEffect(() => {
+    const loadFilteredUsers = async () => {
+      if (!formData.hotelId) {
+        // If no hotel selected, show all users
+        setFilteredUsers(users);
+        return;
+      }
+
+      try {
+        setLoadingUsers(true);
+        // Get users with access to the selected hotel
+        const hotelUsers = await getUsersByHotel(formData.hotelId);
+        setFilteredUsers(hotelUsers);
+      } catch (error) {
+        console.error('Error loading users by hotel:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les utilisateurs pour cet hôtel",
+          variant: "destructive",
+        });
+        // Fallback to all users
+        setFilteredUsers(users);
+      } finally {
+        setLoadingUsers(false);
+      }
+    };
+
+    loadFilteredUsers();
+  }, [formData.hotelId, users, toast]);
 
   // Set receivedById to current user's ID if not already set
   useEffect(() => {
-    if (currentUser && !formData.receivedById) {
+    if (currentUser && !formData.receivedById && !isEditing) {
       setFormData(prev => ({
         ...prev,
         receivedById: currentUser.id
       }));
     }
-  }, [currentUser, formData.receivedById]);
+  }, [currentUser, formData.receivedById, isEditing]);
 
   // Use the date hook for incident date
   const incidentDate = useDate({
@@ -217,59 +253,13 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
     }));
   };
 
-  // Handle select changes
-  const handleSelectChange = (name: string, value: string | null) => {
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-  };
-
-  // Validate form before submission
-  const validateForm = () => {
-    if (!incidentDate.isValid) {
-      return { valid: false, message: "La date de l'incident est invalide" };
-    }
-    if (!formData.hotelId) {
-      return { valid: false, message: "Le champ 'Hôtel' est obligatoire" };
-    }
-    if (!formData.locationId) {
-      return { valid: false, message: "Le champ 'Lieu' est obligatoire" };
-    }
-    if (!formData.categoryId) {
-      return { valid: false, message: "Le champ 'Catégorie' est obligatoire" };
-    }
-    if (!formData.impactId) {
-      return { valid: false, message: "Le champ 'Impact' est obligatoire" };
-    }
-    if (!formData.description || formData.description.length < 10) {
-      return { valid: false, message: "La description doit contenir au moins 10 caractères" };
-    }
-    if (!formData.receivedById) {
-      return { valid: false, message: "Le champ 'Reçu par' est obligatoire" };
-    }
-    if (!formData.statusId) {
-      return { valid: false, message: "Le champ 'Statut' est obligatoire" };
-    }
-    if (formData.arrivalDate && !arrivalDate.isValid) {
-      return { valid: false, message: "La date d'arrivée est invalide" };
-    }
-    if (formData.departureDate && !departureDate.isValid) {
-      return { valid: false, message: "La date de départ est invalide" };
-    }
-    if (formData.departureDate && formData.arrivalDate && formData.departureDate < formData.arrivalDate) {
-      return { valid: false, message: "La date de départ doit être après la date d'arrivée" };
-    }
-    return { valid: true };
-  };
-
-  // Handle form submission with validation
-  const handleSubmit = () => {
-    const validation = validateForm();
-    if (!validation.valid) {
+  // Handle form submission
+  const handleSubmit = async () => {
+    // Validate required fields
+    if (!formData.hotelId || !formData.locationId || !formData.categoryId || !formData.impactId || !formData.description || !formData.statusId) {
       toast({
-        title: "Erreur de validation",
-        description: validation.message,
+        title: "Champs manquants",
+        description: "Veuillez remplir tous les champs obligatoires",
         variant: "destructive",
       });
       return;
@@ -372,7 +362,14 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="hotelId" 
                 value={formData.hotelId} 
-                onValueChange={(value) => handleSelectChange('hotelId', value)}
+                onValueChange={(value) => {
+                  setFormData(prev => ({
+                    ...prev,
+                    hotelId: value,
+                    locationId: '', // Reset location when hotel changes
+                    concludedById: '' // Reset concludedBy when hotel changes
+                  }));
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez un hôtel" />
@@ -396,7 +393,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="locationId" 
                 value={formData.locationId} 
-                onValueChange={(value) => handleSelectChange('locationId', value)}
+                onValueChange={(value) => handleFormChange({ 
+                  target: { name: 'locationId', value } 
+                } as React.ChangeEvent<HTMLSelectElement>)}
                 disabled={!formData.hotelId || loadingLocations}
               >
                 <SelectTrigger>
@@ -433,7 +432,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="categoryId" 
                 value={formData.categoryId} 
-                onValueChange={(value) => handleSelectChange('categoryId', value)}
+                onValueChange={(value) => handleFormChange({ 
+                  target: { name: 'categoryId', value } 
+                } as React.ChangeEvent<HTMLSelectElement>)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez une catégorie" />
@@ -459,7 +460,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="impactId" 
                 value={formData.impactId} 
-                onValueChange={(value) => handleSelectChange('impactId', value)}
+                onValueChange={(value) => handleFormChange({ 
+                  target: { name: 'impactId', value } 
+                } as React.ChangeEvent<HTMLSelectElement>)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionnez un impact" />
@@ -506,9 +509,7 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="receivedById" className="after:content-['*'] after:ml-0.5 after:text-red-500">
-                Reçu par
-              </Label>
+              <Label htmlFor="receivedById">Reçu par</Label>
               <Input
                 id="receivedById"
                 name="receivedById"
@@ -521,18 +522,27 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Label htmlFor="concludedById">Conclu par</Label>
               <Select 
                 value={formData.concludedById || "none"} 
-                onValueChange={(value) => handleSelectChange('concludedById', value === "none" ? null : value)}
+                onValueChange={(value) => handleFormChange({ 
+                  target: { name: 'concludedById', value: value === "none" ? "" : value } 
+                } as React.ChangeEvent<HTMLSelectElement>)}
+                disabled={loadingUsers}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionnez un utilisateur" />
+                  <SelectValue placeholder={loadingUsers ? "Chargement..." : "Sélectionnez un utilisateur"} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">En Attente</SelectItem>
-                  {users
-                    .filter(user => user.id && user.id !== '')
-                    .map(user => (
-                      <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                    ))}
+                  {loadingUsers ? (
+                    <SelectItem value="loading" disabled>Chargement des utilisateurs...</SelectItem>
+                  ) : filteredUsers.length === 0 ? (
+                    <SelectItem value="empty" disabled>Aucun utilisateur disponible</SelectItem>
+                  ) : (
+                    filteredUsers
+                      .filter(user => user.id && user.id !== '')
+                      .map(user => (
+                        <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                      ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -546,7 +556,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               <Select 
                 name="statusId" 
                 value={formData.statusId} 
-                onValueChange={(value) => handleSelectChange('statusId', value)}
+                onValueChange={(value) => handleFormChange({ 
+                  target: { name: 'statusId', value } 
+                } as React.ChangeEvent<HTMLSelectElement>)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Sélectionner un statut" />
@@ -642,7 +654,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 <Select 
                   name="origin" 
                   value={formData.origin || "none"} 
-                  onValueChange={(value) => handleSelectChange('origin', value === "none" ? null : value)}
+                  onValueChange={(value) => handleFormChange({ 
+                    target: { name: 'origin', value: value === "none" ? "" : value } 
+                  } as React.ChangeEvent<HTMLSelectElement>)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Sélectionnez une origine" />

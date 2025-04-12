@@ -98,15 +98,29 @@ export const getUsersByRole = async (role: string) => {
 // Get users by hotel ID
 export const getUsersByHotel = async (hotelId: string) => {
   try {
-    const q = query(collection(db, 'users'), where('hotels', 'array-contains', hotelId), where('active', '==', true));
+    // Query users who have this hotel in their hotels array or are admins
+    const q = query(
+      collection(db, 'users'),
+      where('active', '==', true)
+    );
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    })) as User[];
+    
+    // Filter results to include admins or users with this hotel
+    return querySnapshot.docs
+      .map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+      .filter((user: User) => 
+        user.role === 'admin' || 
+        (user.hotels && user.hotels.includes(hotelId))
+      ) as User[];
   } catch (error) {
     console.error('Error getting users by hotel:', error);
     // Return filtered mock data as fallback
-    return mockUsers.filter(user => user.hotels.includes(hotelId) && user.active);
+    return mockUsers.filter(user => 
+      (user.active && user.role === 'admin') || 
+      (user.active && user.hotels.includes(hotelId))
+    );
   }
 };

@@ -74,10 +74,10 @@ import { exportMaintenanceRequestsToPDF } from '@/lib/pdfUtils';
 import { useToast } from '@/hooks/use-toast';
 import { getCurrentUser } from '@/lib/auth';
 import { getMaintenanceRequests, createMaintenanceRequest } from '@/lib/db/maintenance';
+import { ensureMaintenanceCollection } from '@/lib/db/ensure-collections';
 
 // Import components
 import MaintenanceDialog from '@/components/maintenance/MaintenanceDialog';
-import MaintenanceEdit from '@/components/maintenance/MaintenanceEdit';
 import MaintenanceForm from '@/components/maintenance/MaintenanceForm';
 import MaintenanceList from '@/components/maintenance/MaintenanceList';
 import MaintenanceFilters from '@/components/maintenance/MaintenanceFilters';
@@ -93,12 +93,19 @@ const MaintenancePage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
+  const [collectionChecked, setCollectionChecked] = useState(false);
   const { toast } = useToast();
   
   // Load maintenance requests on mount
   useEffect(() => {
     const loadMaintenanceRequests = async () => {
       try {
+        // Vérifier si la collection existe et la créer si nécessaire
+        if (!collectionChecked) {
+          await ensureMaintenanceCollection();
+          setCollectionChecked(true);
+        }
+        
         const data = await getMaintenanceRequests();
         setMaintenanceRequests(data);
       } catch (error) {
@@ -111,23 +118,14 @@ const MaintenancePage = () => {
       }
     };
     loadMaintenanceRequests();
-  }, []);
+  }, [collectionChecked, toast]);
   
   // New maintenance dialog
   const [newMaintenanceDialogOpen, setNewMaintenanceDialogOpen] = useState(false);
-  const [maintenanceFormData, setMaintenanceFormData] = useState({
-    description: '',
-    hotelId: '',
-    locationId: '',
-    interventionTypeId: '',
-    photoBefore: null as File | null,
-    photoBeforePreview: '',
-    hasQuote: false,
-    quoteFile: null as File | null,
-    quoteAmount: '',
-    quoteAccepted: false
-  });
-
+  
+  // Edit maintenance dialog
+  const [editMaintenanceDialogOpen, setEditMaintenanceDialogOpen] = useState(false);
+  
   // View maintenance dialog
   const [viewMaintenanceDialogOpen, setViewMaintenanceDialogOpen] = useState(false);
   const [selectedMaintenance, setSelectedMaintenance] = useState<any>(null);
@@ -161,48 +159,8 @@ const MaintenancePage = () => {
     return true;
   }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   
-  // Handle form input changes
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setMaintenanceFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-  };
-
-  // Handle switch changes
-  const handleSwitchChange = (name: string, value: boolean) => {
-    setMaintenanceFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-  };
-
-  // Handle file uploads
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, fileType: 'photoBefore' | 'quoteFile') => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (fileType === 'photoBefore') {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setMaintenanceFormData(prev => ({
-          ...prev,
-          photoBefore: file,
-          photoBeforePreview: reader.result as string
-        }));
-      };
-      reader.readAsDataURL(file);
-    } else if (fileType === 'quoteFile') {
-      setMaintenanceFormData(prev => ({
-        ...prev,
-        quoteFile: file
-      }));
-    }
-  };
-
-  // Handle form submission
-  const handleSubmitMaintenance = async () => {
+  // Handle form submission for new maintenance
+  const handleSubmitNewMaintenance = async (formData: any) => {
     try {
       const currentUser = getCurrentUser();
       if (!currentUser) {
@@ -211,11 +169,8 @@ const MaintenancePage = () => {
 
       // Create maintenance request
       await createMaintenanceRequest({
-        ...maintenanceFormData,
-        statusId: 'stat1', // Initial status: Open
-        receivedById: currentUser.id,
-        date: new Date().toISOString().split('T')[0],
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        ...formData,
+        receivedById: currentUser.id
       });
 
       toast({
@@ -228,25 +183,37 @@ const MaintenancePage = () => {
       setMaintenanceRequests(updatedRequests);
       
       setNewMaintenanceDialogOpen(false);
-      
-      // Reset form
-      setMaintenanceFormData({
-        description: '',
-        hotelId: '',
-        locationId: '',
-        interventionTypeId: '',
-        photoBefore: null,
-        photoBeforePreview: '',
-        hasQuote: false,
-        quoteFile: null,
-        quoteAmount: '',
-        quoteAccepted: false
-      });
     } catch (error) {
       console.error('Error creating maintenance request:', error);
       toast({
         title: "Erreur",
         description: "Une erreur est survenue lors de la création de la demande",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  // Handle form submission for edit maintenance
+  const handleSubmitEditMaintenance = async (updatedData: any) => {
+    try {
+      // Here you would normally update the maintenance request in the database
+      
+      // Reload maintenance requests
+      const updatedRequests = await getMaintenanceRequests();
+      setMaintenanceRequests(updatedRequests);
+      
+      toast({
+        title: "Demande mise à jour",
+        description: "La demande d'intervention a été mise à jour avec succès",
+      });
+      
+      setEditMaintenanceDialogOpen(false);
+      setSelectedMaintenance(null);
+    } catch (error) {
+      console.error('Error updating maintenance request:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la mise à jour",
         variant: "destructive",
       });
     }
@@ -311,6 +278,14 @@ const MaintenancePage = () => {
     }
   };
   
+  // Handle edit maintenance from dialog
+  const handleEditMaintenance = () => {
+    if (selectedMaintenance) {
+      setViewMaintenanceDialogOpen(false);
+      setEditMaintenanceDialogOpen(true);
+    }
+  };
+  
   // Handle update maintenance
   const handleUpdateMaintenance = async (updatedMaintenance: any) => {
     try {
@@ -324,6 +299,8 @@ const MaintenancePage = () => {
         title: "Demande mise à jour",
         description: "La demande d'intervention a été mise à jour avec succès",
       });
+      
+      setViewMaintenanceDialogOpen(false);
     } catch (error) {
       console.error('Error updating maintenance request:', error);
       toast({
@@ -477,19 +454,26 @@ const MaintenancePage = () => {
       <MaintenanceForm 
         isOpen={newMaintenanceDialogOpen}
         onClose={() => setNewMaintenanceDialogOpen(false)}
-        formData={maintenanceFormData}
-        onFormChange={handleFormChange}
-        onSwitchChange={handleSwitchChange}
-        onFileUpload={handleFileUpload}
-        onSubmit={handleSubmitMaintenance}
+        onSubmit={handleSubmitNewMaintenance}
+        isEditing={false}
       />
       
-      {/* View/Edit Maintenance Dialog */}
+      {/* Edit Maintenance Form */}
+      <MaintenanceForm 
+        isOpen={editMaintenanceDialogOpen}
+        onClose={() => setEditMaintenanceDialogOpen(false)}
+        maintenance={selectedMaintenance}
+        onSubmit={handleSubmitEditMaintenance}
+        isEditing={true}
+      />
+      
+      {/* View Maintenance Dialog */}
       <MaintenanceDialog 
         maintenance={selectedMaintenance}
         isOpen={viewMaintenanceDialogOpen}
         onClose={() => setViewMaintenanceDialogOpen(false)}
         onUpdate={handleUpdateMaintenance}
+        onEdit={handleEditMaintenance}
       />
     </div>
   );

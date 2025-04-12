@@ -12,7 +12,7 @@ import { getImpactParameters } from '@/lib/db/parameters-impact';
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { getBookingOriginParameters } from '@/lib/db/parameters-booking-origin';
 import { getCurrentUser } from '@/lib/auth';
-import { getUsers } from '@/lib/db/users';
+import { getUsers, getUsersByHotel } from '@/lib/db/users';
 import { useToast } from '@/hooks/use-toast';
 
 interface IncidentEditProps {
@@ -40,8 +40,10 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
   const [statuses, setStatuses] = useState<any[]>([]);
   const [bookingOrigins, setBookingOrigins] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [filteredUsers, setFilteredUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
   
   const { toast } = useToast();
   const currentUser = getCurrentUser();
@@ -72,13 +74,17 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
         const bookingOriginsData = await getBookingOriginParameters();
         setBookingOrigins(bookingOriginsData);
         
-        // Load users
-        const usersData = await getUsers();
-        // Filter out any potential "En Attente" entry from users
-        const filteredUsers = usersData.filter(user => 
-          user.name !== "En Attente" && user.name !== "En attente"
-        );
-        setUsers(filteredUsers);
+        // Load all users initially
+        const allUsers = await getUsers();
+        setUsers(allUsers);
+        
+        // Filter users based on selected hotel
+        if (incident.hotelId) {
+          const hotelUsers = await getUsersByHotel(incident.hotelId);
+          setFilteredUsers(hotelUsers);
+        } else {
+          setFilteredUsers(allUsers);
+        }
         
         // Load locations for the current hotel
         if (incident.hotelId) {
@@ -96,8 +102,9 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
         setLoading(false);
       }
     };
+
     loadData();
-  }, [incident.hotelId]);
+  }, [incident.hotelId, toast]);
 
   // Load locations when hotel changes
   useEffect(() => {
@@ -122,8 +129,40 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
         setLoadingLocations(false);
       }
     };
+
     loadLocations();
-  }, [formData.hotelId]);
+  }, [formData.hotelId, toast]);
+  
+  // Load users filtered by hotel when hotel selection changes
+  useEffect(() => {
+    const loadFilteredUsers = async () => {
+      if (!formData.hotelId) {
+        // If no hotel selected, show all users
+        setFilteredUsers(users);
+        return;
+      }
+
+      try {
+        setLoadingUsers(true);
+        // Get users with access to the selected hotel
+        const hotelUsers = await getUsersByHotel(formData.hotelId);
+        setFilteredUsers(hotelUsers);
+      } catch (error) {
+        console.error('Error loading users by hotel:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les utilisateurs pour cet hôtel",
+          variant: "destructive",
+        });
+        // Fallback to all users
+        setFilteredUsers(users);
+      } finally {
+        setLoadingUsers(false);
+      }
+    };
+
+    loadFilteredUsers();
+  }, [formData.hotelId, users, toast]);
 
   // Handle form input changes
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -136,16 +175,32 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
 
   // Handle select changes
   const handleSelectChange = (name: string, value: string | null) => {
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    if (name === 'hotelId') {
+      // When hotel changes, reset locationId and concludedById
+      setFormData(prev => ({
+        ...prev,
+        [name]: value,
+        locationId: '',
+        concludedById: null
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value
+      }));
+    }
   };
 
   // Filter hotels based on user role
   const filteredHotels = currentUser?.role === 'admin' 
     ? hotels 
     : hotels.filter(hotel => currentUser?.hotels?.includes(hotel.id));
+
+  // Handle save
+  const handleSubmit = () => {
+    // Here you would normally handle file uploads and create URLs
+    onSave(formData);
+  };
 
   if (loading) {
     return (
@@ -327,17 +382,30 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
               <Select 
                 value={formData.concludedById || "none"} 
                 onValueChange={(value) => handleSelectChange('concludedById', value === "none" ? null : value)}
+                disabled={loadingUsers || !formData.hotelId}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionnez un utilisateur" />
+                  <SelectValue placeholder={
+                    !formData.hotelId
+                      ? "Sélectionnez d'abord un hôtel"
+                      : loadingUsers
+                        ? "Chargement..."
+                        : "Sélectionnez un utilisateur"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">En Attente</SelectItem>
-                  {users
-                    .filter(user => user.id && user.id !== '')
-                    .map(user => (
-                      <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                    ))}
+                  {loadingUsers ? (
+                    <SelectItem value="loading" disabled>Chargement des utilisateurs...</SelectItem>
+                  ) : filteredUsers.length === 0 ? (
+                    <SelectItem value="empty" disabled>Aucun utilisateur disponible</SelectItem>
+                  ) : (
+                    filteredUsers
+                      .filter(user => user.id && user.id !== '')
+                      .map(user => (
+                        <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                      ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -465,7 +533,7 @@ const IncidentEdit: React.FC<IncidentEditProps> = ({
           <Button variant="outline" onClick={onClose}>
             Annuler
           </Button>
-          <Button onClick={() => onSave(formData)}>
+          <Button onClick={handleSubmit}>
             Enregistrer les modifications
           </Button>
         </DialogFooter>

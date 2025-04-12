@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,8 +6,13 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Image, FileUp, X } from 'lucide-react';
-import { hotels, parameters, users, getAvailableLocations, getAvailableStaff } from '@/lib/data';
+import { users } from '@/lib/data';
 import { Maintenance, MaintenanceEditFormData } from './types/maintenance.types';
+import { getHotels } from '@/lib/db/hotels';
+import { getHotelLocations } from '@/lib/db/parameters-locations';
+import { getInterventionTypeParameters } from '@/lib/db/parameters-intervention-type';
+import { getStatusParameters } from '@/lib/db/parameters-status';
+import { useToast } from '@/hooks/use-toast';
 
 interface MaintenanceEditProps {
   isOpen: boolean;
@@ -22,7 +27,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
   maintenance,
   onSave
 }) => {
-  const [formData, setFormData] = React.useState<MaintenanceEditFormData>({
+  const [formData, setFormData] = useState<MaintenanceEditFormData>({
     ...maintenance,
     photoBefore: null,
     photoBeforePreview: maintenance.photoBefore || '',
@@ -30,16 +35,58 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
     photoAfterPreview: maintenance.photoAfter || '',
     quoteFile: null
   });
-
-  // Get available locations based on selected hotel
-  const availableLocations = formData.hotelId ? getAvailableLocations(formData.hotelId) : [];
+  
+  const [hotels, setHotels] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
+  const [interventionTypes, setInterventionTypes] = useState<any[]>([]);
+  const [statusParams, setStatusParams] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+  const { toast } = useToast();
   
   // Get available staff based on selected hotel
-  const availableStaff = formData.hotelId ? getAvailableStaff(formData.hotelId) : [];
+  const availableStaff = users.filter(user => 
+    user.role === 'admin' || 
+    (user.hotels && user.hotels.includes(formData.hotelId))
+  );
 
-  // Extract parameters by type
-  const interventionTypeParams = parameters.filter(p => p.type === 'intervention_type');
-  const statusParams = parameters.filter(p => p.type === 'status');
+  // Load data on mount
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        
+        // Load hotels
+        const hotelsData = await getHotels();
+        setHotels(hotelsData);
+        
+        // Load intervention types
+        const interventionTypesData = await getInterventionTypeParameters();
+        setInterventionTypes(interventionTypesData);
+        
+        // Load statuses
+        const statusesData = await getStatusParameters();
+        setStatusParams(statusesData);
+        
+        // Load locations for the selected hotel
+        if (formData.hotelId) {
+          const locationsData = await getHotelLocations(formData.hotelId);
+          setLocations(locationsData);
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les données",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadData();
+  }, [formData.hotelId, toast]);
 
   // Handle form input changes
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -101,6 +148,24 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
     onSave(updatedMaintenance);
   };
 
+  if (loading) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Chargement...</DialogTitle>
+            <DialogDescription>
+              Veuillez patienter pendant le chargement des données
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-6 text-center">
+            <p>Chargement en cours...</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
@@ -159,15 +224,21 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
               <Select 
                 value={formData.locationId} 
                 onValueChange={(value) => handleSelectChange('locationId', value)}
-                disabled={!formData.hotelId}
+                disabled={!formData.hotelId || loadingLocations}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={formData.hotelId ? "Sélectionnez un lieu" : "Sélectionnez d'abord un hôtel"} />
+                  <SelectValue placeholder={!formData.hotelId ? "Sélectionnez d'abord un hôtel" : "Sélectionnez un lieu"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableLocations.map(location => (
-                    <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
-                  ))}
+                  {loadingLocations ? (
+                    <SelectItem value="loading" disabled>Chargement...</SelectItem>
+                  ) : locations.length === 0 ? (
+                    <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
+                  ) : (
+                    locations.map(location => (
+                      <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -183,9 +254,13 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                 <SelectValue placeholder="Sélectionnez un type d'intervention" />
               </SelectTrigger>
               <SelectContent>
-                {interventionTypeParams.map(type => (
-                  <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
-                ))}
+                {interventionTypes.length === 0 ? (
+                  <SelectItem value="none" disabled>Aucun type disponible</SelectItem>
+                ) : (
+                  interventionTypes.map(type => (
+                    <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -388,9 +463,13 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                     <SelectValue placeholder="Sélectionner un statut" />
                   </SelectTrigger>
                   <SelectContent>
-                    {statusParams.map(status => (
-                      <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
-                    ))}
+                    {statusParams.length === 0 ? (
+                      <SelectItem value="none" disabled>Aucun statut disponible</SelectItem>
+                    ) : (
+                      statusParams.map(status => (
+                        <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
