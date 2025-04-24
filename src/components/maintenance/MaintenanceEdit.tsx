@@ -13,6 +13,7 @@ import { getHotelLocations } from '@/lib/db/parameters-locations';
 import { getInterventionTypeParameters } from '@/lib/db/parameters-intervention-type';
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { useToast } from '@/hooks/use-toast';
+import { updateMaintenanceRequest } from '@/lib/db/maintenance';
 
 interface MaintenanceEditProps {
   isOpen: boolean;
@@ -42,6 +43,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
   const [statusParams, setStatusParams] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(false);
+  const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   
   // Get available staff based on selected hotel
@@ -137,15 +139,37 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
   };
 
   // Handle form submission
-  const handleSubmit = () => {
-    // Here you would normally handle file uploads and create URLs
-    const updatedMaintenance: Maintenance = {
-      ...formData,
-      photoBefore: formData.photoBeforePreview || undefined,
-      photoAfter: formData.photoAfterPreview || undefined,
-      // Update other fields as needed
-    };
-    onSave(updatedMaintenance);
+  const handleSubmit = async () => {
+    try {
+      setSaving(true);
+
+      // Update maintenance request
+      await updateMaintenanceRequest(maintenance.id, formData);
+
+      // Here you would normally handle file uploads and create URLs
+      const updatedMaintenance: Maintenance = {
+        ...formData,
+        photoBefore: formData.photoBeforePreview || undefined,
+        photoAfter: formData.photoAfterPreview || undefined,
+        // Update other fields as needed
+      };
+      
+      toast({
+        title: "Intervention mise à jour",
+        description: "L'intervention technique a été mise à jour avec succès",
+      });
+
+      onSave(updatedMaintenance);
+    } catch (error) {
+      console.error('Error updating maintenance:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la mise à jour de l'intervention",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loading) {
@@ -524,15 +548,34 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                 />
               </div>
             </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="comments">Commentaires</Label>
+              <textarea
+                id="comments"
+                name="comments"
+                className="min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                value={formData.comments || ''}
+                onChange={handleFormChange}
+              />
+            </div>
           </div>
         </div>
         
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button 
+            variant="outline" 
+            onClick={onClose}
+            disabled={saving}
+          >
             Annuler
           </Button>
-          <Button type="submit" onClick={handleSubmit}>
-            Enregistrer les modifications
+          <Button 
+            type="submit" 
+            onClick={handleSubmit}
+            disabled={saving}
+          >
+            {saving ? 'Enregistrement...' : 'Enregistrer les modifications'}
           </Button>
         </DialogFooter>
       </DialogContent>

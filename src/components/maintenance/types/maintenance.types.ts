@@ -25,6 +25,14 @@ export interface Maintenance {
   comments?: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+  updatedBy?: string;
+  history?: {
+    timestamp: string;
+    userId: string;
+    action: string;
+    changes: any;
+  }[];
 }
 
 export interface MaintenanceFormData {

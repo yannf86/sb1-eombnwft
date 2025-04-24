@@ -73,7 +73,7 @@ import { exportMaintenanceRequests } from '@/lib/exportUtils';
 import { exportMaintenanceRequestsToPDF } from '@/lib/pdfUtils';
 import { useToast } from '@/hooks/use-toast';
 import { getCurrentUser } from '@/lib/auth';
-import { getMaintenanceRequests, createMaintenanceRequest } from '@/lib/db/maintenance';
+import { getMaintenanceRequests, createMaintenanceRequest, updateMaintenanceRequest, deleteMaintenanceRequest } from '@/lib/db/maintenance';
 import { ensureMaintenanceCollection } from '@/lib/db/ensure-collections';
 
 // Import components
@@ -196,7 +196,8 @@ const MaintenancePage = () => {
   // Handle form submission for edit maintenance
   const handleSubmitEditMaintenance = async (updatedData: any) => {
     try {
-      // Here you would normally update the maintenance request in the database
+      // Update maintenance request
+      await updateMaintenanceRequest(updatedData.id, updatedData);
       
       // Reload maintenance requests
       const updatedRequests = await getMaintenanceRequests();
@@ -278,8 +279,17 @@ const MaintenancePage = () => {
     }
   };
   
+  // Handle edit maintenance directly from list
+  const handleEditMaintenance = (maintenanceId: string) => {
+    const maintenance = maintenanceRequests.find(req => req.id === maintenanceId);
+    if (maintenance) {
+      setSelectedMaintenance(maintenance);
+      setEditMaintenanceDialogOpen(true);
+    }
+  };
+  
   // Handle edit maintenance from dialog
-  const handleEditMaintenance = () => {
+  const handleEditFromDialog = () => {
     if (selectedMaintenance) {
       setViewMaintenanceDialogOpen(false);
       setEditMaintenanceDialogOpen(true);
@@ -289,7 +299,8 @@ const MaintenancePage = () => {
   // Handle update maintenance
   const handleUpdateMaintenance = async (updatedMaintenance: any) => {
     try {
-      // Here you would normally update the maintenance request in the database
+      // Update maintenance request
+      await updateMaintenanceRequest(updatedMaintenance.id, updatedMaintenance);
       
       // Reload maintenance requests
       const updatedRequests = await getMaintenanceRequests();
@@ -308,6 +319,17 @@ const MaintenancePage = () => {
         description: "Une erreur est survenue lors de la mise à jour",
         variant: "destructive",
       });
+    }
+  };
+
+  // Handle delete maintenance
+  const handleDeleteMaintenance = async () => {
+    // Reload maintenance requests after deletion
+    try {
+      const updatedRequests = await getMaintenanceRequests();
+      setMaintenanceRequests(updatedRequests);
+    } catch (error) {
+      console.error('Error reloading maintenance requests:', error);
     }
   };
   
@@ -363,6 +385,7 @@ const MaintenancePage = () => {
               <MaintenanceList 
                 maintenanceRequests={filteredRequests}
                 onViewMaintenance={handleViewMaintenance}
+                onEditMaintenance={handleEditMaintenance}
               />
             </CardContent>
           </Card>
@@ -459,13 +482,15 @@ const MaintenancePage = () => {
       />
       
       {/* Edit Maintenance Form */}
-      <MaintenanceForm 
-        isOpen={editMaintenanceDialogOpen}
-        onClose={() => setEditMaintenanceDialogOpen(false)}
-        maintenance={selectedMaintenance}
-        onSubmit={handleSubmitEditMaintenance}
-        isEditing={true}
-      />
+      {selectedMaintenance && (
+        <MaintenanceForm 
+          isOpen={editMaintenanceDialogOpen}
+          onClose={() => setEditMaintenanceDialogOpen(false)}
+          maintenance={selectedMaintenance}
+          onSubmit={handleSubmitEditMaintenance}
+          isEditing={true}
+        />
+      )}
       
       {/* View Maintenance Dialog */}
       <MaintenanceDialog 
@@ -473,7 +498,8 @@ const MaintenancePage = () => {
         isOpen={viewMaintenanceDialogOpen}
         onClose={() => setViewMaintenanceDialogOpen(false)}
         onUpdate={handleUpdateMaintenance}
-        onEdit={handleEditMaintenance}
+        onEdit={handleEditFromDialog}
+        onDelete={handleDeleteMaintenance}
       />
     </div>
   );

@@ -5,9 +5,9 @@ import { Progress } from '@/components/ui/progress';
 
 // Composant pour afficher un résumé des statistiques de gamification dans le dashboard
 const GamificationStats: React.FC = () => {
-  const { userStats, level, rank, badges, challenges, challengeProgress } = useGamification();
+  const { userStats, level, rank, badges, challenges, challengeProgress, enabled } = useGamification();
   
-  if (!userStats || !level || !rank) {
+  if (!enabled || !userStats || !level || !rank) {
     return null;
   }
   

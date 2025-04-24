@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -14,31 +14,6 @@ import {
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
-} from '@/components/ui/table';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
-} from '@/components/ui/select';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogFooter, 
-  DialogHeader, 
-  DialogTitle 
-} from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   Search, 
   Download, 
@@ -48,21 +23,29 @@ import {
   MapPin,
   Briefcase,
   Tag,
-  FileText
+  FileText,
+  Edit,
+  Trash2,
+  Image as ImageIcon,
+  User
 } from 'lucide-react';
-import { 
-  lostItems,
-  hotels, 
-  users, 
-  parameters, 
-  getHotelName, 
-  getParameterLabel, 
-  getUserName 
-} from '@/lib/data';
 import { formatDate } from '@/lib/utils';
 import { exportLostItems } from '@/lib/exportUtils';
 import { exportLostItemsToPDF } from '@/lib/pdfUtils';
 import { useToast } from '@/hooks/use-toast';
+import { getCurrentUser } from '@/lib/auth';
+import { getLostItems, createLostItem, updateLostItem, deleteLostItem } from '@/lib/db/lost-items';
+import { getLostItemTypeParameters, getLostItemTypeLabel } from '@/lib/db/parameters-lost-item-type';
+import { getHotelName, getHotels } from '@/lib/db/hotels';
+import { getLocationLabel } from '@/lib/db/parameters-locations';
+import { getUserName } from '@/lib/db/users';
+
+// Import components
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import LostItemForm from '@/components/lost-found/LostItemForm';
+import LostItemFilters from '@/components/lost-found/LostItemFilters';
+import LostItemList from '@/components/lost-found/LostItemList';
 
 // Define chart colors
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
@@ -74,15 +57,65 @@ const LostFoundPage = () => {
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [lostItems, setLostItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const currentUser = getCurrentUser();
+  
+  // For item history display
+  const [historyUserNames, setHistoryUserNames] = useState<Record<string, string>>({});
+  
+  // Load lost items on mount
+  useEffect(() => {
+    loadLostItems();
+  }, []);
+
+  // Function to load lost items
+  const loadLostItems = async () => {
+    try {
+      setLoading(true);
+      const data = await getLostItems();
+      setLostItems(data);
+    } catch (error) {
+      console.error('Error loading lost items:', error);
+      toast({
+        title: "Erreur",
+        description: "Impossible de charger les objets trouvés",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // New lost item dialog
+  const [newItemDialogOpen, setNewItemDialogOpen] = useState(false);
+  
+  // Edit lost item dialog
+  const [editItemDialogOpen, setEditItemDialogOpen] = useState(false);
   
   // View lost item dialog
   const [viewItemDialogOpen, setViewItemDialogOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   
-  // Extract parameters by type
-  const locationParams = parameters.filter(p => p.type === 'location');
-  const itemTypeParams = parameters.filter(p => p.type === 'lost_item_type');
+  // State for item types to avoid parameter filtering every render
+  const [itemTypeParams, setItemTypeParams] = useState<any[]>([]);
+  
+  // Load item types
+  useEffect(() => {
+    const loadItemTypes = async () => {
+      try {
+        const types = await getLostItemTypeParameters();
+        setItemTypeParams(types);
+      } catch (error) {
+        console.error('Error loading item types:', error);
+        // Fallback to static data from imported parameters
+        setItemTypeParams([]);
+      }
+    };
+    
+    loadItemTypes();
+  }, []);
   
   // Filter lost items based on selected filters
   const filteredItems = lostItems.filter(item => {
@@ -99,29 +132,107 @@ const LostFoundPage = () => {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       const matchesDescription = item.description.toLowerCase().includes(query);
-      const matchesHotel = getHotelName(item.hotelId).toLowerCase().includes(query);
-      const matchesType = getParameterLabel(item.itemTypeId).toLowerCase().includes(query);
-      const matchesStorage = item.storageLocation.toLowerCase().includes(query);
+      const matchesStorageLocation = item.storageLocation.toLowerCase().includes(query);
       
-      if (!matchesDescription && !matchesHotel && !matchesType && !matchesStorage) return false;
+      if (!matchesDescription && !matchesStorageLocation) return false;
     }
     
     return true;
   }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   
-  // Prepare chart data
+  // Handle form submission for new lost item
+  const handleSubmitLostItem = async (formData: any) => {
+    try {
+      // Create lost item in Firebase
+      await createLostItem(formData);
+      
+      toast({
+        title: "Objet enregistré",
+        description: "L'objet trouvé a été enregistré avec succès",
+      });
+      
+      // Reload lost items
+      await loadLostItems();
+      
+      // Close dialog
+      setNewItemDialogOpen(false);
+    } catch (error) {
+      console.error('Error creating lost item:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de l'enregistrement de l'objet trouvé",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  // Handle form submission for edit
+  const handleUpdateLostItem = async (updatedData: any) => {
+    try {
+      // Update lost item in Firebase
+      await updateLostItem(updatedData.id, updatedData);
+      
+      toast({
+        title: "Objet mis à jour",
+        description: "L'objet trouvé a été mis à jour avec succès",
+      });
+      
+      // Reload lost items
+      await loadLostItems();
+      
+      // Close dialog
+      setEditItemDialogOpen(false);
+      setSelectedItem(null);
+    } catch (error) {
+      console.error('Error updating lost item:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la mise à jour de l'objet trouvé",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  // Handle delete lost item
+  const handleDeleteLostItem = async () => {
+    if (!selectedItem) return;
+
+    try {
+      // Delete lost item in Firebase
+      await deleteLostItem(selectedItem.id);
+      
+      toast({
+        title: "Objet supprimé",
+        description: "L'objet trouvé a été supprimé avec succès",
+      });
+      
+      // Reload lost items
+      await loadLostItems();
+      
+      // Close dialog
+      setViewItemDialogOpen(false);
+      setSelectedItem(null);
+    } catch (error) {
+      console.error('Error deleting lost item:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression de l'objet trouvé",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  // Prepare chart data - using async functions to get labels
   const itemsByType = itemTypeParams.map(type => ({
     name: type.label,
-    value: lostItems.filter(item => 
-      item.itemTypeId === type.id && 
-      (filterHotel === 'all' || item.hotelId === filterHotel) &&
-      (filterStatus === 'all' || item.status === filterStatus)
-    ).length
+    value: filteredItems.filter(item => item.itemTypeId === type.id).length
   }));
   
+  // Get locations from parameters
+  const locationParams = [];
   const itemsByLocation = locationParams.map(location => ({
     name: location.label,
-    value: lostItems.filter(item => 
+    value: filteredItems.filter(item => 
       item.locationId === location.id && 
       (filterHotel === 'all' || item.hotelId === filterHotel) &&
       (filterStatus === 'all' || item.status === filterStatus) &&
@@ -130,18 +241,30 @@ const LostFoundPage = () => {
   }));
   
   const itemsByStatus = [
-    { name: 'Conservé', value: lostItems.filter(item => item.status === 'conservé' && (filterHotel === 'all' || item.hotelId === filterHotel)).length },
-    { name: 'Rendu', value: lostItems.filter(item => item.status === 'rendu' && (filterHotel === 'all' || item.hotelId === filterHotel)).length },
-    { name: 'Transféré', value: lostItems.filter(item => item.status === 'transféré' && (filterHotel === 'all' || item.hotelId === filterHotel)).length }
+    { name: 'Conservé', value: filteredItems.filter(item => item.status === 'conservé').length },
+    { name: 'Rendu', value: filteredItems.filter(item => item.status === 'rendu').length },
+    { name: 'Transféré', value: filteredItems.filter(item => item.status === 'transféré').length }
   ];
   
+  // Dynamic chart data based on available hotels
+  const [hotels, setHotels] = useState<any[]>([]);
+  useEffect(() => {
+    const loadHotels = async () => {
+      try {
+        const hotelsData = await getHotels();
+        setHotels(hotelsData);
+      } catch (error) {
+        console.error('Error loading hotels:', error);
+        setHotels([]);
+      }
+    };
+    loadHotels();
+  }, []);
+  
+  // Calculate items by hotel
   const itemsByHotel = hotels.map(hotel => ({
     name: hotel.name,
-    value: lostItems.filter(item => 
-      item.hotelId === hotel.id && 
-      (filterStatus === 'all' || item.status === filterStatus) &&
-      (filterType === 'all' || item.itemTypeId === filterType)
-    ).length
+    value: filteredItems.filter(item => item.hotelId === hotel.id).length
   }));
   
   // Reset all filters
@@ -155,7 +278,19 @@ const LostFoundPage = () => {
   // Handle export to Excel
   const handleExcelExport = () => {
     try {
-      exportLostItems(filteredItems, getHotelName, getParameterLabel, getUserName);
+      exportLostItems(filteredItems, getHotelName, async (id) => {
+        let label = 'Inconnu';
+        try {
+          if (id.startsWith('lit')) {
+            label = await getLostItemTypeLabel(id);
+          } else if (id.startsWith('loc')) {
+            label = await getLocationLabel(id);
+          }
+          return label;
+        } catch (error) {
+          return 'Inconnu';
+        }
+      }, getUserName);
       
       toast({
         title: "Export Excel réussi",
@@ -176,7 +311,19 @@ const LostFoundPage = () => {
   // Handle export to PDF
   const handlePDFExport = () => {
     try {
-      const fileName = exportLostItemsToPDF(filteredItems, getHotelName, getParameterLabel, getUserName);
+      const fileName = exportLostItemsToPDF(filteredItems, getHotelName, async (id) => {
+        let label = 'Inconnu';
+        try {
+          if (id.startsWith('lit')) {
+            label = await getLostItemTypeLabel(id);
+          } else if (id.startsWith('loc')) {
+            label = await getLocationLabel(id);
+          }
+          return label;
+        } catch (error) {
+          return 'Inconnu';
+        }
+      }, getUserName);
       
       toast({
         title: "Export PDF réussi",
@@ -194,14 +341,60 @@ const LostFoundPage = () => {
     }
   };
   
-  // Handle view lost item
-  const handleViewItem = (itemId: string) => {
+  // Handle view lost item and load associated data
+  const handleViewItem = async (itemId: string) => {
     const item = lostItems.find(i => i.id === itemId);
     if (item) {
       setSelectedItem(item);
       setViewItemDialogOpen(true);
+      
+      // Load user names for history entries
+      if (item.history && item.history.length > 0) {
+        const userIds = [...new Set(item.history.map((entry: any) => entry.userId))];
+        const userNamesObj: Record<string, string> = {};
+        
+        for (const userId of userIds) {
+          try {
+            const name = await getUserName(userId);
+            userNamesObj[userId] = name || 'Utilisateur inconnu';
+          } catch (error) {
+            console.error(`Error fetching user name for ID ${userId}:`, error);
+            userNamesObj[userId] = 'Utilisateur inconnu';
+          }
+        }
+        
+        setHistoryUserNames(userNamesObj);
+      }
     }
   };
+  
+  // Handle edit lost item
+  const handleEditItem = (itemId: string) => {
+    const item = lostItems.find(i => i.id === itemId);
+    if (item) {
+      setSelectedItem(item);
+      setEditItemDialogOpen(true);
+    }
+  };
+  
+  // Handle edit from view dialog
+  const handleEditFromView = () => {
+    if (selectedItem) {
+      setViewItemDialogOpen(false);
+      setEditItemDialogOpen(true);
+    }
+  };
+  
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold mb-2">Chargement des données...</h2>
+          <p className="text-muted-foreground">Veuillez patienter pendant le chargement des objets trouvés.</p>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div className="space-y-6">
@@ -212,7 +405,7 @@ const LostFoundPage = () => {
         </div>
         
         <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
-          <Button>
+          <Button onClick={() => setNewItemDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Nouvel Objet
           </Button>
@@ -229,74 +422,19 @@ const LostFoundPage = () => {
         </div>
       </div>
       
-      <div className="flex flex-col space-y-2">
-        <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Rechercher..."
-              className="pl-8 w-full"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          
-          <Select value={filterHotel} onValueChange={setFilterHotel}>
-            <SelectTrigger className="w-full sm:w-[180px]">
-              <SelectValue placeholder="Tous les hôtels" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tous les hôtels</SelectItem>
-              {hotels.map(hotel => (
-                <SelectItem key={hotel.id} value={hotel.id}>{hotel.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          
-          <Button variant="outline" size="icon" onClick={() => setFiltersExpanded(!filtersExpanded)}>
-            <SlidersHorizontal className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="outline" size="icon" onClick={resetFilters}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-        </div>
-        
-        {filtersExpanded && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-4 border rounded-md">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Statut</label>
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Tous les statuts" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tous les statuts</SelectItem>
-                  <SelectItem value="conservé">Conservé</SelectItem>
-                  <SelectItem value="rendu">Rendu</SelectItem>
-                  <SelectItem value="transféré">Transféré</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div>
-              <label className="text-sm font-medium mb-1 block">Type d'objet</label>
-              <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Tous les types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tous les types</SelectItem>
-                  {itemTypeParams.map(type => (
-                    <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        )}
-      </div>
+      <LostItemFilters
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        filterHotel={filterHotel}
+        onHotelChange={setFilterHotel}
+        filterStatus={filterStatus}
+        onStatusChange={setFilterStatus}
+        filterType={filterType}
+        onTypeChange={setFilterType}
+        filtersExpanded={filtersExpanded}
+        onFiltersExpandedChange={setFiltersExpanded}
+        onReset={resetFilters}
+      />
       
       <Tabs defaultValue="list" value={selectedTab} onValueChange={setSelectedTab} className="w-full">
         <TabsList>
@@ -306,78 +444,11 @@ const LostFoundPage = () => {
         
         <TabsContent value="list" className="space-y-4">
           <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Hôtel</TableHead>
-                  <TableHead>Lieu</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Trouvé par</TableHead>
-                  <TableHead>Stockage</TableHead>
-                  <TableHead>Statut</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredItems.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={9} className="text-center">
-                      Aucun objet trouvé
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredItems.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <div className="font-medium">{formatDate(item.date)}</div>
-                        <div className="text-xs text-muted-foreground">{item.time}</div>
-                      </TableCell>
-                      <TableCell>{getHotelName(item.hotelId)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center">
-                          <MapPin className="mr-1 h-3.5 w-3.5 text-slate-500" />
-                          {getParameterLabel(item.locationId)}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center">
-                          <Tag className="mr-1 h-3.5 w-3.5 text-slate-500" />
-                          {getParameterLabel(item.itemTypeId)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-xs truncate">{item.description}</TableCell>
-                      <TableCell>{getUserName(item.foundById)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center">
-                          <Briefcase className="mr-1 h-3.5 w-3.5 text-slate-500" />
-                          {item.storageLocation}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className={
-                          item.status === 'conservé' ? "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-blue-50 text-blue-600 border-blue-300" :
-                          item.status === 'rendu' ? "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-green-50 text-green-600 border-green-300" :
-                          "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-orange-50 text-orange-600 border-orange-300"
-                        }>
-                          {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          onClick={() => handleViewItem(item.id)}
-                        >
-                          Voir
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <LostItemList 
+              items={filteredItems}
+              onViewItem={handleViewItem}
+              onEditItem={handleEditItem}
+            />
           </div>
         </TabsContent>
         
@@ -495,9 +566,28 @@ const LostFoundPage = () => {
         </TabsContent>
       </Tabs>
       
+      {/* New Lost Item Form */}
+      <LostItemForm 
+        isOpen={newItemDialogOpen}
+        onClose={() => setNewItemDialogOpen(false)}
+        onSubmit={handleSubmitLostItem}
+        isEditing={false}
+      />
+      
+      {/* Edit Lost Item Form */}
+      {selectedItem && (
+        <LostItemForm 
+          isOpen={editItemDialogOpen}
+          onClose={() => setEditItemDialogOpen(false)}
+          lostItem={selectedItem}
+          onSubmit={handleUpdateLostItem}
+          isEditing={true}
+        />
+      )}
+      
       {/* View Lost Item Dialog */}
       <Dialog open={viewItemDialogOpen} onOpenChange={setViewItemDialogOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Détails de l'objet trouvé</DialogTitle>
           </DialogHeader>
@@ -539,17 +629,17 @@ const LostFoundPage = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-muted-foreground">Hôtel</p>
-                    <p className="font-medium">{getHotelName(selectedItem.hotelId)}</p>
+                    <p className="font-medium">{selectedItem.hotelName || selectedItem.hotelId}</p>
                   </div>
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-muted-foreground">Lieu</p>
-                    <p className="font-medium">{getParameterLabel(selectedItem.locationId)}</p>
+                    <p className="font-medium">{selectedItem.locationName || selectedItem.locationId}</p>
                   </div>
                 </div>
                 
                 <div className="space-y-1">
                   <p className="text-sm font-medium text-muted-foreground">Type d'objet</p>
-                  <p className="font-medium">{getParameterLabel(selectedItem.itemTypeId)}</p>
+                  <p className="font-medium">{selectedItem.itemTypeName || selectedItem.itemTypeId}</p>
                 </div>
               </div>
               
@@ -566,7 +656,7 @@ const LostFoundPage = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-muted-foreground">Trouvé par</p>
-                    <p className="font-medium">{getUserName(selectedItem.foundById)}</p>
+                    <p className="font-medium">{selectedItem.foundByName || selectedItem.foundById}</p>
                   </div>
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-muted-foreground">Lieu de stockage</p>
@@ -576,11 +666,15 @@ const LostFoundPage = () => {
               </div>
               
               {/* Photo if exists */}
-              {selectedItem.photo && (
+              {selectedItem.photoUrl && (
                 <div className="space-y-2 pt-2 border-t">
                   <h3 className="text-lg font-medium">Photo</h3>
-                  <div className="h-48 w-full border rounded-md flex items-center justify-center bg-slate-50">
-                    <p className="text-slate-500">Photo disponible</p>
+                  <div className="h-48 w-full border rounded-md flex items-center justify-center bg-slate-50 overflow-hidden">
+                    <img
+                      src={selectedItem.photoUrl}
+                      alt="Photo de l'objet"
+                      className="max-h-full max-w-full object-contain"
+                    />
                   </div>
                 </div>
               )}
@@ -605,6 +699,36 @@ const LostFoundPage = () => {
                 </div>
               )}
               
+              {/* History if exists */}
+              {selectedItem.history && selectedItem.history.length > 0 && (
+                <div className="space-y-2 pt-2 border-t">
+                  <h3 className="text-lg font-medium">Historique</h3>
+                  <div className="space-y-2">
+                    {selectedItem.history.slice().reverse().map((entry: any, index: number) => {
+                      const date = formatDate(new Date(entry.timestamp));
+                      const time = new Date(entry.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                      const userName = historyUserNames[entry.userId] || 'Utilisateur inconnu';
+                      
+                      return (
+                        <div key={index} className="border-b pb-2 last:border-b-0 text-sm">
+                          <div className="flex items-center">
+                            <User className="h-3.5 w-3.5 mr-1 text-slate-500" />
+                            <span className="font-medium">{userName}</span>
+                            <span className="mx-1">-</span>
+                            <span>{date} à {time}</span>
+                          </div>
+                          <div className="text-muted-foreground mt-1">
+                            {entry.action === 'create' && 'A créé cet objet trouvé'}
+                            {entry.action === 'update' && 'A mis à jour cet objet trouvé'}
+                            {entry.action === 'delete' && 'A supprimé cet objet trouvé'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              
               {/* Metadata */}
               <div className="space-y-4 pt-2 border-t">
                 <div className="grid grid-cols-2 gap-4">
@@ -621,13 +745,24 @@ const LostFoundPage = () => {
             </div>
           )}
           
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setViewItemDialogOpen(false)}>
-              Fermer
+          <DialogFooter className="flex justify-between pt-4 border-t">
+            <Button 
+              variant="destructive" 
+              onClick={handleDeleteLostItem}
+              className="flex items-center"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Supprimer
             </Button>
-            <Button>
-              Modifier
-            </Button>
+            <div className="space-x-2">
+              <Button variant="outline" onClick={() => setViewItemDialogOpen(false)}>
+                Fermer
+              </Button>
+              <Button onClick={handleEditFromView}>
+                <Edit className="mr-2 h-4 w-4" />
+                Modifier
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

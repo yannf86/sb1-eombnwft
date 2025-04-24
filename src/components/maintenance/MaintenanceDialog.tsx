@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/utils';
@@ -18,10 +18,16 @@ import {
   Check,
   X,
   FileText,
-  Edit
+  Edit,
+  Trash2,
+  History
 } from 'lucide-react';
 import { Maintenance } from './types/maintenance.types';
 import { useToast } from '@/hooks/use-toast';
+import { getCurrentUser } from '@/lib/auth';
+import { deleteMaintenanceRequest } from '@/lib/db/maintenance';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import MaintenanceEdit from './MaintenanceEdit';
 
 interface MaintenanceDialogProps {
   maintenance: Maintenance | null;
@@ -29,6 +35,7 @@ interface MaintenanceDialogProps {
   onClose: () => void;
   onUpdate?: (updatedMaintenance: Maintenance) => void;
   onEdit?: () => void;
+  onDelete?: () => void;
 }
 
 const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({ 
@@ -36,11 +43,179 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
   isOpen, 
   onClose,
   onUpdate,
-  onEdit
+  onEdit,
+  onDelete
 }) => {
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [userNames, setUserNames] = useState<{[key: string]: string}>({});
   const { toast } = useToast();
+  const currentUser = getCurrentUser();
+  const isAdmin = currentUser?.role === 'admin';
+
+  // Load user names for history entries
+  useEffect(() => {
+    if (!maintenance || !maintenance.history) return;
+
+    const loadUserNames = async () => {
+      const names: {[key: string]: string} = {};
+      const userIds = new Set<string>();
+
+      // Collect all user IDs from history entries
+      maintenance.history.forEach((entry: any) => {
+        if (entry.userId && !userNames[entry.userId]) {
+          userIds.add(entry.userId);
+        }
+      });
+
+      // Load names for all user IDs
+      for (const userId of userIds) {
+        names[userId] = await getUserName(userId);
+      }
+
+      setUserNames(prev => ({ ...prev, ...names }));
+    };
+
+    loadUserNames();
+  }, [maintenance, userNames]);
+
+  // Handle delete maintenance
+  const handleDelete = async () => {
+    if (!isAdmin) return;
+    
+    const confirmed = window.confirm('Êtes-vous sûr de vouloir supprimer cette intervention ? Cette action est irréversible.');
+    if (!confirmed) return;
+    
+    setIsDeleting(true);
+    try {
+      await deleteMaintenanceRequest(maintenance!.id);
+      toast({
+        title: "Intervention supprimée",
+        description: "L'intervention technique a été supprimée avec succès",
+      });
+      onDelete?.();
+      onClose();
+    } catch (error) {
+      console.error('Error deleting maintenance:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression de l'intervention",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   if (!maintenance) return null;
+
+  // Format history entries for display
+  const formatHistoryEntry = (entry: any) => {
+    const userName = userNames[entry.userId] || 'Utilisateur inconnu';
+    const date = formatDate(new Date(entry.timestamp));
+    const time = new Date(entry.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    
+    let actionText = '';
+    switch (entry.action) {
+      case 'create':
+        actionText = 'a créé l\'intervention';
+        break;
+      case 'update':
+        actionText = 'a modifié l\'intervention';
+        break;
+      case 'delete':
+        actionText = 'a supprimé l\'intervention';
+        break;
+      default:
+        actionText = 'a effectué une action';
+    }
+    
+    return (
+      <div className="space-y-2 border-b pb-2 last:border-0">
+        <div className="flex items-center text-sm">
+          <User className="h-3.5 w-3.5 mr-1 text-slate-500" />
+          <span className="font-medium">{userName}</span>
+          <span className="mx-1">{actionText}</span>
+          <Clock className="h-3.5 w-3.5 mx-1 text-slate-500" />
+          <span className="text-muted-foreground">{date} à {time}</span>
+        </div>
+        
+        {entry.action === 'update' && entry.changes && Object.keys(entry.changes).length > 0 && (
+          <div className="text-xs space-y-1 ml-5">
+            {Object.entries(entry.changes).map(([field, change]: [string, any], i) => {
+              let fieldLabel = field.charAt(0).toUpperCase() + field.slice(1);
+              
+              // Format specific fields
+              switch (field) {
+                case 'statusId':
+                  fieldLabel = 'Statut';
+                  break;
+                case 'interventionTypeId':
+                  fieldLabel = 'Type d\'intervention';
+                  break;
+                case 'hotelId':
+                  fieldLabel = 'Hôtel';
+                  break;
+                case 'locationId':
+                  fieldLabel = 'Lieu';
+                  break;
+                case 'receivedById':
+                  fieldLabel = 'Reçu par';
+                  break;
+                case 'technicianId':
+                  fieldLabel = 'Technicien';
+                  break;
+                case 'description':
+                  fieldLabel = 'Description';
+                  break;
+                case 'comments':
+                  fieldLabel = 'Commentaires';
+                  break;
+                case 'photoBefore':
+                  fieldLabel = 'Photo avant';
+                  break;
+                case 'photoAfter':
+                  fieldLabel = 'Photo après';
+                  break;
+                case 'quoteUrl':
+                  fieldLabel = 'Devis';
+                  break;
+              }
+              
+              return (
+                <div key={i} className="flex items-start">
+                  <span className="font-medium mr-1">{fieldLabel}:</span>
+                  <span className="text-red-500 line-through mr-1">
+                    {typeof change.old === 'object' ? JSON.stringify(change.old) : 
+                     change.old === null || change.old === undefined ? '(vide)' : change.old.toString()}
+                  </span>
+                  <span className="text-green-500">
+                    {typeof change.new === 'object' ? JSON.stringify(change.new) : 
+                     change.new === null || change.new === undefined ? '(vide)' : change.new.toString()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // If in edit mode, show the edit form
+  if (editMode) {
+    return (
+      <MaintenanceEdit 
+        isOpen={isOpen}
+        onClose={() => setEditMode(false)}
+        maintenance={maintenance}
+        onSave={(updatedMaintenance) => {
+          if (onUpdate) onUpdate(updatedMaintenance);
+          setEditMode(false);
+        }}
+      />
+    );
+  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -313,13 +488,61 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
               </div>
             </div>
           </div>
+          
+          {/* Historique des modifications */}
+          {maintenance.history && maintenance.history.length > 0 && (
+            <div className="space-y-4 pt-2 border-t">
+              <Accordion type="single" collapsible className="w-full">
+                <AccordionItem value="history">
+                  <AccordionTrigger className="flex items-center">
+                    <div className="flex items-center">
+                      <History className="h-5 w-5 mr-2 text-slate-500" />
+                      <h3 className="text-lg font-medium">Historique</h3>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="space-y-3 mt-2">
+                      {maintenance.history
+                        .slice()
+                        .reverse()
+                        .map((entry: any, index: number) => (
+                          <div key={index} className="text-sm">
+                            {formatHistoryEntry(entry)}
+                          </div>
+                        ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </div>
+          )}
         </div>
         
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+        <DialogFooter className="space-x-2 pt-4 border-t">
+          {isAdmin && (
+            <Button 
+              variant="destructive" 
+              onClick={handleDelete} 
+              disabled={isDeleting}
+              className="flex items-center"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Supprimer
+              {isDeleting && '...'}
+            </Button>
+          )}
+          
+          <Button 
+            variant="outline" 
+            onClick={onClose}
+          >
             Fermer
           </Button>
-          <Button onClick={onEdit} className="flex items-center">
+          
+          <Button 
+            onClick={() => setEditMode(true)}
+            className="flex items-center"
+          >
             <Edit className="h-4 w-4 mr-2" />
             Modifier
           </Button>

@@ -1,13 +1,12 @@
-import { collection, addDoc, getDocs, query, where, orderBy, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase';
-import type { Maintenance } from '../schema';
 import { getCurrentUser } from '../auth';
 
-// Get all maintenance requests
-export const getMaintenanceRequests = async (hotelId?: string) => {
+// Get all lost items
+export const getLostItems = async (hotelId?: string) => {
   try {
-    let q = collection(db, 'maintenance');
+    let q = collection(db, 'lost_items');
     if (hotelId) {
       q = query(q, where('hotelId', '==', hotelId));
     }
@@ -15,17 +14,17 @@ export const getMaintenanceRequests = async (hotelId?: string) => {
     return querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
-    })) as Maintenance[];
+    }));
   } catch (error) {
-    console.error('Error getting maintenance requests:', error);
+    console.error('Error getting lost items:', error);
     throw error;
   }
 };
 
-// Get a single maintenance request by ID
-export const getMaintenanceRequest = async (id: string) => {
+// Get a single lost item by ID
+export const getLostItem = async (id: string) => {
   try {
-    const docRef = doc(db, 'maintenance', id);
+    const docRef = doc(db, 'lost_items', id);
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
@@ -35,9 +34,9 @@ export const getMaintenanceRequest = async (id: string) => {
     return {
       id: docSnap.id,
       ...docSnap.data()
-    } as Maintenance;
+    };
   } catch (error) {
-    console.error('Error getting maintenance request:', error);
+    console.error('Error getting lost item:', error);
     throw error;
   }
 };
@@ -62,18 +61,18 @@ async function uploadFile(file: File, path: string): Promise<string> {
   }
 }
 
-// Create new maintenance request
-export const createMaintenanceRequest = async (data: Omit<Maintenance, 'id' | 'createdAt' | 'updatedAt'>) => {
+// Create new lost item
+export const createLostItem = async (data: any) => {
   try {
-    // Extract file fields if present
-    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, ...maintenanceData } = data as any;
+    // Extract file fields and preview data
+    const { photo, photoPreview, ...lostItemData } = data;
     
     // Get current user
     const currentUser = getCurrentUser();
     
-    // Create payload
-    const payload: any = {
-      ...maintenanceData,
+    // Create the lost item payload
+    const lostItemPayload: any = {
+      ...lostItemData,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       createdBy: currentUser?.id || 'system',
@@ -86,33 +85,20 @@ export const createMaintenanceRequest = async (data: Omit<Maintenance, 'id' | 'c
         changes: { type: 'initial_creation' }
       }]
     };
-    
-    // Upload photoBefore if present
-    if (photoBefore instanceof File) {
-      const photoUrl = await uploadFile(photoBefore, 'maintenance/photos/before');
-      payload.photoBefore = photoUrl;
-    } else if (photoBeforePreview) {
-      payload.photoBefore = photoBeforePreview;
+
+    // Upload photo if present
+    if (photo instanceof File) {
+      const photoUrl = await uploadFile(photo, 'lost_items/photos');
+      lostItemPayload.photoUrl = photoUrl;
+    } else if (photoPreview) {
+      lostItemPayload.photoUrl = photoPreview;
     }
-    
-    // Upload photoAfter if present
-    if (photoAfter instanceof File) {
-      const photoUrl = await uploadFile(photoAfter, 'maintenance/photos/after');
-      payload.photoAfter = photoUrl;
-    } else if (photoAfterPreview) {
-      payload.photoAfter = photoAfterPreview;
-    }
-    
-    // Upload quote file if present
-    if (quoteFile instanceof File) {
-      const quoteUrl = await uploadFile(quoteFile, 'maintenance/quotes');
-      payload.quoteUrl = quoteUrl;
-    }
-    
-    const docRef = await addDoc(collection(db, 'maintenance'), payload);
+
+    // Create lost item document
+    const docRef = await addDoc(collection(db, 'lost_items'), lostItemPayload);
     return docRef.id;
   } catch (error) {
-    console.error('Error creating maintenance request:', error);
+    console.error('Error creating lost item:', error);
     throw error;
   }
 };
@@ -126,8 +112,7 @@ const trackChanges = (oldData: any, newData: any) => {
     // Skip history field, internal fields, and functions
     if (key === 'history' || key === 'id' || key === 'createdAt' || key === 'updatedAt' || 
         key === 'createdBy' || key === 'updatedBy' || typeof value === 'function' ||
-        key === 'photoBefore' || key === 'photoBeforePreview' || key === 'photoAfter' || 
-        key === 'photoAfterPreview' || key === 'quoteFile') {
+        key === 'photo' || key === 'photoPreview') {
       continue;
     }
     
@@ -152,57 +137,46 @@ const trackChanges = (oldData: any, newData: any) => {
   return changes;
 };
 
-// Update maintenance request
-export const updateMaintenanceRequest = async (id: string, data: Partial<Maintenance>) => {
+// Update lost item
+export const updateLostItem = async (id: string, data: any) => {
   try {
-    // Get the current maintenance to track changes
-    const docRef = doc(db, 'maintenance', id);
+    // Get the current lost item to track changes
+    const docRef = doc(db, 'lost_items', id);
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      throw new Error('Maintenance request not found');
+      throw new Error('Lost item not found');
     }
     
     const oldData = docSnap.data();
+    
+    // Extract file fields if present
+    const { photo, photoPreview, ...itemData } = data;
     
     // Get current user
     const currentUser = getCurrentUser();
     const userId = currentUser?.id || 'system';
     
-    // Extract file fields if present
-    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, ...maintenanceData } = data as any;
-    
     // Create update payload
-    const payload: any = { ...maintenanceData };
+    const payload: any = { ...itemData };
     
     // Track what has changed
     const changes = trackChanges(oldData, payload);
     
-    // Upload photoBefore if present
-    if (photoBefore instanceof File) {
-      const photoUrl = await uploadFile(photoBefore, 'maintenance/photos/before');
-      payload.photoBefore = photoUrl;
-      changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
-    } else if (photoBeforePreview && photoBeforePreview !== oldData.photoBefore) {
-      payload.photoBefore = photoBeforePreview;
-      changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
+    // Check if returnDate was set and add it to changes
+    if (payload.status === 'rendu' && !oldData.returnDate && !payload.returnDate) {
+      payload.returnDate = new Date().toISOString();
+      changes['returnDate'] = { old: null, new: payload.returnDate };
     }
     
-    // Upload photoAfter if present
-    if (photoAfter instanceof File) {
-      const photoUrl = await uploadFile(photoAfter, 'maintenance/photos/after');
-      payload.photoAfter = photoUrl;
-      changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
-    } else if (photoAfterPreview && photoAfterPreview !== oldData.photoAfter) {
-      payload.photoAfter = photoAfterPreview;
-      changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
-    }
-    
-    // Upload quote file if present
-    if (quoteFile instanceof File) {
-      const quoteUrl = await uploadFile(quoteFile, 'maintenance/quotes');
-      payload.quoteUrl = quoteUrl;
-      changes['quoteUrl'] = { old: oldData.quoteUrl || null, new: 'Updated' };
+    // Upload photo if present
+    if (photo instanceof File) {
+      const photoUrl = await uploadFile(photo, 'lost_items/photos');
+      payload.photoUrl = photoUrl;
+      changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+    } else if (photoPreview && photoPreview !== oldData.photoUrl) {
+      payload.photoUrl = photoPreview;
+      changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
     }
     
     // Create a history entry if there are changes
@@ -227,24 +201,24 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
     // Update the document
     await updateDoc(docRef, payload);
   } catch (error) {
-    console.error('Error updating maintenance request:', error);
+    console.error('Error updating lost item:', error);
     throw error;
   }
 };
 
-// Delete maintenance request
-export const deleteMaintenanceRequest = async (id: string) => {
+// Delete lost item
+export const deleteLostItem = async (id: string) => {
   try {
     // Get current user
     const currentUser = getCurrentUser();
     const userId = currentUser?.id || 'system';
     
-    // Get the current maintenance request
-    const docRef = doc(db, 'maintenance', id);
+    // Get the current lost item
+    const docRef = doc(db, 'lost_items', id);
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      throw new Error('Maintenance request not found');
+      throw new Error('Lost item not found');
     }
     
     const oldData = docSnap.data();
@@ -270,7 +244,7 @@ export const deleteMaintenanceRequest = async (id: string) => {
     // Now delete the document
     await deleteDoc(docRef);
   } catch (error) {
-    console.error('Error deleting maintenance request:', error);
+    console.error('Error deleting lost item:', error);
     throw error;
   }
 };

@@ -53,6 +53,8 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         interventionTypeId: '',
         photoBefore: null,
         photoBeforePreview: '',
+        photoAfter: null,
+        photoAfterPreview: '',
         hasQuote: false,
         quoteFile: null,
         quoteAmount: '',
@@ -101,9 +103,9 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         const usersData = await getUsers();
         setUsers(usersData);
         
-        // Load locations for the selected hotel
-        if (formData.hotelId) {
-          const locationsData = await getHotelLocations(formData.hotelId);
+        // Load locations for the selected hotel if editing
+        if (isEditing && maintenance?.hotelId) {
+          const locationsData = await getHotelLocations(maintenance.hotelId);
           setLocations(locationsData);
         }
       } catch (error) {
@@ -119,27 +121,42 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
     };
     
     loadData();
-  }, [formData.hotelId, toast]);
+  }, [isEditing, maintenance, toast]);
 
   // Load locations when hotel changes
   useEffect(() => {
     const loadLocations = async () => {
       if (!formData.hotelId) {
         setLocations([]);
+        // Clear locationId when hotel is changed
+        setFormData(prev => ({
+          ...prev,
+          locationId: ''
+        }));
         return;
       }
 
       try {
         setLoadingLocations(true);
+        // Use getHotelLocations to get locations specific to this hotel
         const locationsData = await getHotelLocations(formData.hotelId);
         setLocations(locationsData);
+        
+        // If current locationId is not in the new locations, reset it
+        if (formData.locationId && !locationsData.some(loc => loc.id === formData.locationId)) {
+          setFormData(prev => ({
+            ...prev,
+            locationId: ''
+          }));
+        }
       } catch (error) {
         console.error('Error loading locations:', error);
         toast({
           title: "Erreur",
-          description: "Impossible de charger les lieux",
+          description: "Impossible de charger les lieux pour cet hôtel",
           variant: "destructive",
         });
+        setLocations([]);
       } finally {
         setLoadingLocations(false);
       }
@@ -169,10 +186,20 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
 
   // Handle select changes
   const handleSelectChange = (name: string, value: string | null) => {
-    setFormData(prev => ({
-      ...prev,
-      [name]: value === "none" ? null : value
-    }));
+    if (name === 'hotelId') {
+      // When hotel changes, reset locationId and technicianId
+      setFormData(prev => ({
+        ...prev,
+        [name]: value,
+        locationId: '', // Reset location when hotel changes
+        technicianId: null // Reset technician when hotel changes
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value === "none" ? null : value
+      }));
+    }
   };
 
   // Handle switch changes
@@ -335,7 +362,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                 onValueChange={(value) => handleSelectChange('hotelId', value)}
                 disabled={currentUser?.role === 'standard' && currentUser?.hotels?.length === 1}
               >
-                <SelectTrigger>
+                <SelectTrigger id="hotelId">
                   <SelectValue placeholder="Sélectionnez un hôtel" />
                 </SelectTrigger>
                 <SelectContent>
@@ -357,14 +384,14 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                 onValueChange={(value) => handleSelectChange('locationId', value)}
                 disabled={!formData.hotelId || loadingLocations}
               >
-                <SelectTrigger>
+                <SelectTrigger id="locationId">
                   <SelectValue placeholder={!formData.hotelId ? "Sélectionnez d'abord un hôtel" : loadingLocations ? "Chargement..." : "Sélectionnez un lieu"} />
                 </SelectTrigger>
                 <SelectContent>
                   {loadingLocations ? (
                     <SelectItem value="loading" disabled>Chargement...</SelectItem>
                   ) : locations.length === 0 ? (
-                    <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
+                    <SelectItem value="none" disabled>Aucun lieu disponible pour cet hôtel</SelectItem>
                   ) : (
                     locations.map(location => (
                       <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
@@ -381,7 +408,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
               value={formData.interventionTypeId} 
               onValueChange={(value) => handleSelectChange('interventionTypeId', value)}
             >
-              <SelectTrigger>
+              <SelectTrigger id="interventionTypeId">
                 <SelectValue placeholder="Sélectionnez un type d'intervention" />
               </SelectTrigger>
               <SelectContent>
@@ -576,7 +603,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                   value={formData.technicianId || "unassigned"} 
                   onValueChange={(value) => handleSelectChange('technicianId', value === "unassigned" ? null : value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="technicianId">
                     <SelectValue placeholder="Sélectionner un technicien" />
                   </SelectTrigger>
                   <SelectContent>
@@ -594,7 +621,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                   value={formData.statusId} 
                   onValueChange={(value) => handleSelectChange('statusId', value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="statusId">
                     <SelectValue placeholder="Sélectionner un statut" />
                   </SelectTrigger>
                   <SelectContent>

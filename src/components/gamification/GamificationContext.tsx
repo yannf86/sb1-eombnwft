@@ -18,6 +18,7 @@ type GamificationContextType = {
   challenges: Challenge[];
   challengeProgress: { [id: string]: number };
   recentBadges: Badge[];
+  enabled: boolean;
   
   performAction: (action: GamificationAction) => void;
   clearRecentBadges: () => void;
@@ -35,8 +36,22 @@ export const GamificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [challengeProgress, setChallengeProgress] = useState<{ [id: string]: number }>({});
   const [recentBadges, setRecentBadges] = useState<Badge[]>([]);
+  const [enabled, setEnabled] = useState<boolean>(true);
   
   const { toast } = useToast();
+  
+  // Check if gamification is enabled from settings
+  useEffect(() => {
+    try {
+      const savedSettings = localStorage.getItem('gamificationSettings');
+      if (savedSettings) {
+        const settings = JSON.parse(savedSettings);
+        setEnabled(settings.enabled !== false);
+      }
+    } catch (error) {
+      console.error("Error loading gamification settings:", error);
+    }
+  }, []);
   
   // Initialise les statistiques de l'utilisateur
   const refreshStats = () => {
@@ -62,6 +77,9 @@ export const GamificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, []);
   
   const performAction = (action: GamificationAction) => {
+    // If gamification is disabled, do nothing
+    if (!enabled) return;
+    
     const currentUser = getCurrentUser();
     if (!currentUser) return;
     
@@ -134,6 +152,7 @@ export const GamificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         challenges,
         challengeProgress,
         recentBadges,
+        enabled,
         performAction,
         clearRecentBadges,
         getBadgesByCategory,
