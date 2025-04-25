@@ -1,7 +1,8 @@
 import { collection, addDoc, getDocs, query, where, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../firebase';
+import { db } from '../firebase';
 import { getCurrentUser } from '../auth';
+import { deleteFile } from './file-upload';
+import { uploadToSupabase, isDataUrl, dataUrlToFile } from '../supabase';
 
 // Get all lost items
 export const getLostItems = async (hotelId?: string) => {
@@ -41,26 +42,6 @@ export const getLostItem = async (id: string) => {
   }
 };
 
-// Upload a file to storage and get its URL
-async function uploadFile(file: File, path: string): Promise<string> {
-  try {
-    // Create a unique filename using timestamp and original name
-    const timestamp = Date.now();
-    const filename = `${timestamp}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const storageRef = ref(storage, `${path}/${filename}`);
-    
-    // Upload the file
-    const snapshot = await uploadBytes(storageRef, file);
-    
-    // Get the download URL
-    const downloadURL = await getDownloadURL(snapshot.ref);
-    return downloadURL;
-  } catch (error) {
-    console.error('Error uploading file:', error);
-    throw error;
-  }
-}
-
 // Create new lost item
 export const createLostItem = async (data: any) => {
   try {
@@ -86,10 +67,27 @@ export const createLostItem = async (data: any) => {
       }]
     };
 
-    // Upload photo if present
+    // Upload photo to Supabase if present
     if (photo instanceof File) {
-      const photoUrl = await uploadFile(photo, 'lost_items/photos');
-      lostItemPayload.photoUrl = photoUrl;
+      try {
+        // Use the objettrouve bucket as specified
+        const photoUrl = await uploadToSupabase(photo, 'objettrouve');
+        lostItemPayload.photoUrl = photoUrl;
+      } catch (error) {
+        console.error('Error uploading photo to Supabase:', error);
+        throw new Error(`Failed to upload photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoPreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoPreview, 'lost_item_photo.jpg');
+      if (file) {
+        try {
+          const photoUrl = await uploadToSupabase(file, 'objettrouve');
+          lostItemPayload.photoUrl = photoUrl;
+        } catch (error) {
+          console.error('Error uploading photo from data URL to Supabase:', error);
+        }
+      }
     } else if (photoPreview) {
       lostItemPayload.photoUrl = photoPreview;
     }
@@ -157,11 +155,11 @@ export const updateLostItem = async (id: string, data: any) => {
     const currentUser = getCurrentUser();
     const userId = currentUser?.id || 'system';
     
+    // Track what has changed
+    const changes = trackChanges(oldData, itemData);
+    
     // Create update payload
     const payload: any = { ...itemData };
-    
-    // Track what has changed
-    const changes = trackChanges(oldData, payload);
     
     // Check if returnDate was set and add it to changes
     if (payload.status === 'rendu' && !oldData.returnDate && !payload.returnDate) {
@@ -169,14 +167,48 @@ export const updateLostItem = async (id: string, data: any) => {
       changes['returnDate'] = { old: null, new: payload.returnDate };
     }
     
-    // Upload photo if present
+    // Upload photo to Supabase if present (using objettrouve bucket)
     if (photo instanceof File) {
-      const photoUrl = await uploadFile(photo, 'lost_items/photos');
-      payload.photoUrl = photoUrl;
-      changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+      try {
+        const photoUrl = await uploadToSupabase(photo, 'objettrouve');
+        
+        // Delete the old photo if it exists
+        if (oldData.photoUrl) {
+          await deleteFile(oldData.photoUrl);
+        }
+        
+        payload.photoUrl = photoUrl;
+        changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+      } catch (error) {
+        console.error('Error uploading photo to Supabase during update:', error);
+        throw new Error(`Failed to update photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoPreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoPreview, 'lost_item_photo.jpg');
+      if (file) {
+        try {
+          const photoUrl = await uploadToSupabase(file, 'objettrouve');
+          
+          // Delete the old photo if it exists
+          if (oldData.photoUrl) {
+            await deleteFile(oldData.photoUrl);
+          }
+          
+          payload.photoUrl = photoUrl;
+          changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+        } catch (error) {
+          console.error('Error uploading photo from data URL to Supabase during update:', error);
+        }
+      }
     } else if (photoPreview && photoPreview !== oldData.photoUrl) {
       payload.photoUrl = photoPreview;
-      changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+      changes['photoUrl'] = { old: oldData.photoUrl || null, new: photoPreview };
+    } else if (photoPreview === '' && oldData.photoUrl) {
+      // Photo has been removed
+      await deleteFile(oldData.photoUrl);
+      payload.photoUrl = null;
+      changes['photoUrl'] = { old: oldData.photoUrl, new: null };
     }
     
     // Create a history entry if there are changes
@@ -198,7 +230,7 @@ export const updateLostItem = async (id: string, data: any) => {
     payload.updatedAt = new Date().toISOString();
     payload.updatedBy = userId;
     
-    // Update the document
+    // Update the document in Firestore
     await updateDoc(docRef, payload);
   } catch (error) {
     console.error('Error updating lost item:', error);
@@ -222,6 +254,17 @@ export const deleteLostItem = async (id: string) => {
     }
     
     const oldData = docSnap.data();
+    
+    // Delete the photo file from storage if it exists
+    if (oldData.photoUrl) {
+      try {
+        console.log('🗑️ Deleting photo file from storage:', oldData.photoUrl);
+        await deleteFile(oldData.photoUrl);
+        console.log('✅ Photo file deleted from storage successfully');
+      } catch (deleteError) {
+        console.error('❌ Error deleting photo file:', deleteError);
+      }
+    }
     
     // Add deletion to history
     const historyEntry = {

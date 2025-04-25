@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, setDoc, limit, query } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, limit, query, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
 /**
@@ -14,6 +14,21 @@ export const checkCollectionExists = async (collectionName: string): Promise<boo
   } catch (error) {
     console.error(`Error checking if collection ${collectionName} exists:`, error);
     return false;
+  }
+};
+
+/**
+ * Supprime le document factice qui a servi à initialiser la collection
+ * @param collectionName Nom de la collection
+ */
+export const removeDummyDoc = async (collectionName: string): Promise<void> => {
+  try {
+    const dummyDocRef = doc(db, collectionName, 'dummy_doc');
+    await deleteDoc(dummyDocRef);
+    console.log(`Dummy document removed from ${collectionName} collection`);
+  } catch (error) {
+    console.error(`Error removing dummy document from ${collectionName} collection:`, error);
+    // Ne pas déclencher d'exception ici, car ce n'est pas critique
   }
 };
 
@@ -40,7 +55,12 @@ export const ensureMaintenanceCollection = async (): Promise<void> => {
       throw error;
     }
   } else {
-    console.log('Collection maintenance exists');
+    // La collection existe, vérifions si le document dummy_doc existe et supprimons-le
+    try {
+      await removeDummyDoc('maintenance');
+    } catch (error) {
+      console.error('Error checking/removing dummy doc:', error);
+    }
   }
 };
 

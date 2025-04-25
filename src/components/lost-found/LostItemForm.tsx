@@ -4,20 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { 
-  Image, 
-  X, 
-  Calendar, 
-  Clock, 
-  Building, 
-  MapPin, 
-  Tag, 
-  User, 
-  Package,
-  UserCheck,
-  Mail,
-  Phone
-} from 'lucide-react';
+import { Image, X, Loader2 } from 'lucide-react';
 import { DateTimePicker } from '@/components/ui/date-time-picker';
 import { getHotels } from '@/lib/db/hotels';
 import { getHotelLocations } from '@/lib/db/parameters-locations';
@@ -26,6 +13,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { getUsers, getUsersByHotel } from '@/lib/db/users';
 import { useDate } from '@/hooks/use-date';
 import { useToast } from '@/hooks/use-toast';
+import { supabase, uploadToSupabase, isDataUrl, dataUrlToFile, deleteFromSupabase } from '@/lib/supabase';
 
 interface LostItemFormProps {
   isOpen: boolean;
@@ -83,6 +71,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
   const [loadingItemTypes, setLoadingItemTypes] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
 
   // Load all data on mount
   useEffect(() => {
@@ -147,7 +136,6 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
 
       try {
         setLoadingLocations(true);
-        // Use getHotelLocations to get only locations for this specific hotel
         const locationsData = await getHotelLocations(formData.hotelId);
         setLocations(locationsData);
         
@@ -263,20 +251,97 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
     }
   };
 
-  // Handle file uploads
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setFormData(prev => ({
-        ...prev,
-        photo: file,
-        photoPreview: reader.result as string
-      }));
-    };
-    reader.readAsDataURL(file);
+    try {
+      setPhotoUploading(true);
+
+      // Validate file size (2MB max)
+      if (file.size > 2 * 1024 * 1024) {
+        toast({
+          title: "Fichier trop volumineux",
+          description: "La taille du fichier ne doit pas dépasser 2MB",
+          variant: "destructive",
+        });
+        setPhotoUploading(false);
+        return;
+      }
+
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        toast({
+          title: "Format de fichier incorrect",
+          description: "Veuillez sélectionner un fichier image (JPG, PNG, etc.)",
+          variant: "destructive",
+        });
+        setPhotoUploading(false);
+        return;
+      }
+
+      // Read file and create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({
+          ...prev,
+          photo: file,
+          photoPreview: reader.result as string
+        }));
+        setPhotoUploading(false);
+      };
+      
+      reader.onerror = () => {
+        setPhotoUploading(false);
+        toast({
+          title: "Erreur de lecture",
+          description: "Impossible de lire le fichier sélectionné",
+          variant: "destructive",
+        });
+      };
+      
+      reader.readAsDataURL(file);
+    } catch (error) {
+      setPhotoUploading(false);
+      console.error('Error handling file upload:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors du traitement du fichier",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Delete photo from form and storage
+  const handleDeletePhoto = async () => {
+    // If editing and we have a photoUrl, delete from storage
+    if (isEditing && lostItem?.photoUrl) {
+      try {
+        console.log('🗑️ Deleting photo from storage:', lostItem.photoUrl);
+        await deleteFromSupabase(lostItem.photoUrl);
+        console.log('✅ Photo successfully deleted from storage');
+        
+        toast({
+          title: "Photo supprimée",
+          description: "La photo a été supprimée avec succès",
+        });
+      } catch (error) {
+        console.error('❌ Error deleting photo:', error);
+        toast({
+          title: "Erreur",
+          description: "Erreur lors de la suppression de la photo. Veuillez réessayer.",
+          variant: "destructive",
+        });
+      }
+    }
+    
+    // Remove photo from form data
+    setFormData(prev => ({
+      ...prev,
+      photo: null,
+      photoPreview: ''
+    }));
   };
 
   // Filter hotels based on user role
@@ -315,7 +380,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
   };
 
   // Handle form submission
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     // Validate the form
     const validation = validateForm();
     if (!validation.valid) {
@@ -330,7 +395,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
     setSaving(true);
     
     try {
-      // Process data before submitting
+      // Update form data with dates from hooks
       const updatedData = {
         ...formData,
         date: foundDate.date,
@@ -338,7 +403,17 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
         returnDate: formData.status === 'rendu' ? (returnDate.date || new Date().toISOString().split('T')[0]) : null
       };
       
-      onSubmit(updatedData);
+      // If there's a photo file, it will be handled by the server
+      // If there's only a photoPreview URL, make sure it's included
+      
+      await onSubmit(updatedData);
+      
+      toast({
+        title: "Objet enregistré",
+        description: isEditing ? "L'objet a été mis à jour avec succès" : "L'objet trouvé a été enregistré avec succès",
+      });
+      
+      onClose();
     } catch (error) {
       console.error('Error submitting form:', error);
       toast({
@@ -354,7 +429,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
   if (loading) {
     return (
       <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>Chargement...</DialogTitle>
             <DialogDescription>
@@ -362,6 +437,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
             <p>Chargement en cours...</p>
           </div>
         </DialogContent>
@@ -601,7 +677,14 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
           <div className="space-y-2">
             <Label htmlFor="photo">Photo de l'objet</Label>
             <div className="mt-2">
-              {formData.photoPreview ? (
+              {photoUploading ? (
+                <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                  <div className="text-center">
+                    <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                    <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                  </div>
+                </div>
+              ) : formData.photoPreview ? (
                 <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
                   <img 
                     src={formData.photoPreview} 
@@ -612,30 +695,28 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
                     variant="destructive" 
                     size="sm" 
                     className="absolute top-2 right-2"
-                    onClick={() => setFormData(prev => ({
-                      ...prev,
-                      photo: null,
-                      photoPreview: ''
-                    }))}
+                    onClick={handleDeletePhoto}
+                    disabled={saving}
                   >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               ) : (
                 <div className="flex items-center justify-center w-full">
-                  <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                  <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 dark:hover:bg-bray-800 dark:bg-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:hover:border-gray-500 dark:hover:bg-gray-600">
                     <div className="flex flex-col items-center justify-center pt-5 pb-6">
                       <Image className="w-8 h-8 mb-3 text-gray-400" />
-                      <p className="mb-2 text-sm text-gray-500">
+                      <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
                         <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
                       </p>
-                      <p className="text-xs text-gray-500">PNG, JPG (MAX. 2MB)</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">PNG, JPG (MAX. 2MB)</p>
                     </div>
                     <input 
                       type="file" 
                       className="hidden" 
                       accept="image/*"
                       onChange={handleFileUpload}
+                      disabled={saving || photoUploading}
                     />
                   </label>
                 </div>
@@ -722,11 +803,21 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
         </div>
         
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={saving || photoUploading}>
             Annuler
           </Button>
-          <Button type="submit" onClick={handleSubmit} disabled={saving}>
-            {saving ? "Enregistrement..." : isEditing ? 'Enregistrer les modifications' : 'Créer l\'objet trouvé'}
+          <Button 
+            onClick={handleSubmit}
+            disabled={saving || photoUploading}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Enregistrement...
+              </>
+            ) : (
+              isEditing ? 'Enregistrer les modifications' : 'Créer l\'objet trouvé'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

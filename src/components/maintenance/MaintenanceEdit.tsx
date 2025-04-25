@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Image, FileUp, X } from 'lucide-react';
+import { Image, FileUp, X, Loader2 } from 'lucide-react';
 import { users } from '@/lib/data';
 import { Maintenance, MaintenanceEditFormData } from './types/maintenance.types';
 import { getHotels } from '@/lib/db/hotels';
@@ -14,6 +14,7 @@ import { getInterventionTypeParameters } from '@/lib/db/parameters-intervention-
 import { getStatusParameters } from '@/lib/db/parameters-status';
 import { useToast } from '@/hooks/use-toast';
 import { updateMaintenanceRequest } from '@/lib/db/maintenance';
+import { deleteFromSupabase } from '@/lib/supabase';
 
 interface MaintenanceEditProps {
   isOpen: boolean;
@@ -44,6 +45,8 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [photoBeforeUploading, setPhotoBeforeUploading] = useState(false);
+  const [photoAfterUploading, setPhotoAfterUploading] = useState(false);
   const { toast } = useToast();
   
   // Get available staff based on selected hotel
@@ -116,25 +119,152 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
   };
 
   // Handle file uploads
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, fileType: 'photoBefore' | 'photoAfter' | 'quoteFile') => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, fileType: 'photoBefore' | 'photoAfter' | 'quoteFile') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (fileType === 'photoBefore' || fileType === 'photoAfter') {
-      const reader = new FileReader();
-      reader.onloadend = () => {
+    try {
+      if (fileType === 'photoBefore' || fileType === 'photoAfter') {
+        // Set uploading state
+        if (fileType === 'photoBefore') setPhotoBeforeUploading(true);
+        else setPhotoAfterUploading(true);
+        
+        // Validate file size and type
+        if (file.size > 2 * 1024 * 1024) {
+          toast({
+            title: "Fichier trop volumineux",
+            description: "La taille du fichier ne doit pas dépasser 2MB",
+            variant: "destructive",
+          });
+          if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
+          else setPhotoAfterUploading(false);
+          return;
+        }
+        
+        if (!file.type.startsWith('image/')) {
+          toast({
+            title: "Format de fichier incorrect",
+            description: "Veuillez sélectionner un fichier image (JPG, PNG, etc.)",
+            variant: "destructive",
+          });
+          if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
+          else setPhotoAfterUploading(false);
+          return;
+        }
+        
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setFormData(prev => ({
+            ...prev,
+            [fileType]: file,
+            [`${fileType}Preview`]: reader.result as string
+          }));
+          if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
+          else setPhotoAfterUploading(false);
+        };
+        reader.onerror = () => {
+          if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
+          else setPhotoAfterUploading(false);
+          toast({
+            title: "Erreur de lecture",
+            description: "Impossible de lire le fichier sélectionné",
+            variant: "destructive",
+          });
+        };
+        reader.readAsDataURL(file);
+      } else if (fileType === 'quoteFile') {
         setFormData(prev => ({
           ...prev,
-          [fileType]: file,
-          [`${fileType}Preview`]: reader.result as string
+          quoteFile: file
         }));
-      };
-      reader.readAsDataURL(file);
-    } else if (fileType === 'quoteFile') {
+      }
+    } catch (error) {
+      if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
+      else if (fileType === 'photoAfter') setPhotoAfterUploading(false);
+      console.error('Error handling file upload:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors du traitement du fichier",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle delete photo before
+  const handleDeletePhotoBefore = async () => {
+    try {
+      // If we have an existing photo URL, delete it from Supabase
+      if (maintenance?.photoBefore) {
+        console.log('🗑️ Deleting photoBefore from Supabase:', maintenance.photoBefore);
+        const success = await deleteFromSupabase(maintenance.photoBefore);
+        if (success) {
+          console.log('✅ Photo before deleted successfully from Supabase');
+          toast({
+            title: "Photo supprimée",
+            description: "La photo du problème a été supprimée avec succès",
+          });
+        } else {
+          console.error('❌ Failed to delete photo from Supabase');
+          toast({
+            title: "Avertissement",
+            description: "La photo a été retirée du formulaire mais peut-être pas du stockage",
+            variant: "destructive",
+          });
+        }
+      }
+      
+      // Update form data
       setFormData(prev => ({
         ...prev,
-        quoteFile: file
+        photoBefore: null,
+        photoBeforePreview: ''
       }));
+    } catch (error) {
+      console.error('Error deleting photo before:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression de la photo",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle delete photo after
+  const handleDeletePhotoAfter = async () => {
+    try {
+      // If we have an existing photo URL, delete it from Supabase
+      if (maintenance?.photoAfter) {
+        console.log('🗑️ Deleting photoAfter from Supabase:', maintenance.photoAfter);
+        const success = await deleteFromSupabase(maintenance.photoAfter);
+        if (success) {
+          console.log('✅ Photo after deleted successfully from Supabase');
+          toast({
+            title: "Photo supprimée",
+            description: "La photo après résolution a été supprimée avec succès",
+          });
+        } else {
+          console.error('❌ Failed to delete photo from Supabase');
+          toast({
+            title: "Avertissement",
+            description: "La photo a été retirée du formulaire mais peut-être pas du stockage",
+            variant: "destructive",
+          });
+        }
+      }
+      
+      // Update form data
+      setFormData(prev => ({
+        ...prev,
+        photoAfter: null,
+        photoAfterPreview: ''
+      }));
+    } catch (error) {
+      console.error('Error deleting photo after:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression de la photo",
+        variant: "destructive",
+      });
     }
   };
 
@@ -146,13 +276,18 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
       // Update maintenance request
       await updateMaintenanceRequest(maintenance.id, formData);
 
-      // Here you would normally handle file uploads and create URLs
+      // Create updated maintenance object for parent component
       const updatedMaintenance: Maintenance = {
         ...formData,
         photoBefore: formData.photoBeforePreview || undefined,
         photoAfter: formData.photoAfterPreview || undefined,
-        // Update other fields as needed
-      };
+        // Remove file properties that shouldn't be part of the Maintenance type
+        photoBefore: undefined,
+        photoAfter: undefined,
+        photoBeforePreview: undefined,
+        photoAfterPreview: undefined,
+        quoteFile: undefined,
+      } as any;
       
       toast({
         title: "Intervention mise à jour",
@@ -183,6 +318,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
             <p>Chargement en cours...</p>
           </div>
         </DialogContent>
@@ -306,7 +442,14 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
               {/* Photo Avant */}
               <div className="space-y-2">
                 <Label>Photo avant</Label>
-                {formData.photoBeforePreview ? (
+                {photoBeforeUploading ? (
+                  <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                    <div className="text-center">
+                      <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                      <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                    </div>
+                  </div>
+                ) : formData.photoBeforePreview ? (
                   <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
                     <img 
                       src={formData.photoBeforePreview} 
@@ -317,11 +460,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                       variant="destructive" 
                       size="sm" 
                       className="absolute top-2 right-2"
-                      onClick={() => setFormData(prev => ({
-                        ...prev,
-                        photoBefore: null,
-                        photoBeforePreview: ''
-                      }))}
+                      onClick={handleDeletePhotoBefore}
                     >
                       <X className="h-4 w-4" />
                     </Button>
@@ -347,7 +486,14 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
               {/* Photo Après */}
               <div className="space-y-2">
                 <Label>Photo après</Label>
-                {formData.photoAfterPreview ? (
+                {photoAfterUploading ? (
+                  <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                    <div className="text-center">
+                      <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                      <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                    </div>
+                  </div>
+                ) : formData.photoAfterPreview ? (
                   <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
                     <img 
                       src={formData.photoAfterPreview} 
@@ -358,11 +504,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                       variant="destructive" 
                       size="sm" 
                       className="absolute top-2 right-2"
-                      onClick={() => setFormData(prev => ({
-                        ...prev,
-                        photoAfter: null,
-                        photoAfterPreview: ''
-                      }))}
+                      onClick={handleDeletePhotoAfter}
                     >
                       <X className="h-4 w-4" />
                     </Button>
@@ -397,7 +539,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
               <Label htmlFor="hasQuote">Devis disponible</Label>
             </div>
             
-            {formData.quoteUrl && (
+            {(formData.quoteUrl || formData.quoteFile) && (
               <>
                 <div className="space-y-2">
                   <Label htmlFor="quoteFile">Fichier du devis</Label>
@@ -420,6 +562,11 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                   {formData.quoteFile && (
                     <p className="text-sm text-green-600">
                       Fichier sélectionné: {formData.quoteFile.name}
+                    </p>
+                  )}
+                  {formData.quoteUrl && !formData.quoteFile && (
+                    <p className="text-sm text-blue-600">
+                      Devis actuel: {formData.quoteUrl.split('/').pop()}
                     </p>
                   )}
                 </div>
@@ -465,7 +612,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                   value={formData.technicianId || "unassigned"} 
                   onValueChange={(value) => handleSelectChange('technicianId', value === "unassigned" ? null : value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="technicianId">
                     <SelectValue placeholder="Sélectionner un technicien" />
                   </SelectTrigger>
                   <SelectContent>
@@ -566,16 +713,22 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
           <Button 
             variant="outline" 
             onClick={onClose}
-            disabled={saving}
+            disabled={saving || photoBeforeUploading || photoAfterUploading}
           >
             Annuler
           </Button>
           <Button 
-            type="submit" 
             onClick={handleSubmit}
-            disabled={saving}
+            disabled={saving || photoBeforeUploading || photoAfterUploading}
           >
-            {saving ? 'Enregistrement...' : 'Enregistrer les modifications'}
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Enregistrement...
+              </>
+            ) : (
+              'Enregistrer les modifications'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -27,8 +27,20 @@ import { isAuthenticated, hasModuleAccess } from './lib/auth';
 import { ToastProvider } from './components/ui/toast';
 import { Toaster } from './components/ui/toaster';
 
+// Connection Status Alert
+import { Alert, AlertDescription } from './components/ui/alert';
+import { WifiOff } from 'lucide-react';
+
 // Create a client
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 // Protected route component
 type ProtectedRouteProps = {
@@ -49,9 +61,33 @@ const ProtectedRoute = ({ moduleCode, children }: ProtectedRouteProps) => {
 };
 
 function App() {
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+
+  // Monitor online/offline status
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
+        {!isOnline && (
+          <Alert variant="destructive" className="fixed top-0 left-0 right-0 z-50 flex justify-center">
+            <WifiOff className="h-4 w-4 mr-2" />
+            <AlertDescription>
+              Connexion internet perdue. Application en mode hors ligne.
+            </AlertDescription>
+          </Alert>
+        )}
         <Router>
           <Routes>
             <Route path="/login" element={<LoginPage />} />

@@ -58,7 +58,8 @@ import {
   Clock,
   Euro,
   CalendarRange,
-  User
+  User,
+  Loader2
 } from 'lucide-react';
 import { 
   hotels, 
@@ -94,6 +95,7 @@ const MaintenancePage = () => {
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
   const [collectionChecked, setCollectionChecked] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
   
   // Load maintenance requests on mount
@@ -162,16 +164,20 @@ const MaintenancePage = () => {
   // Handle form submission for new maintenance
   const handleSubmitNewMaintenance = async (formData: any) => {
     try {
+      setIsProcessing(true);
+      
       const currentUser = getCurrentUser();
       if (!currentUser) {
         throw new Error('User not authenticated');
       }
 
+      console.log("Creating maintenance request with data:", formData);
       // Create maintenance request
-      await createMaintenanceRequest({
+      const maintenanceId = await createMaintenanceRequest({
         ...formData,
         receivedById: currentUser.id
       });
+      console.log("Maintenance request created successfully with ID:", maintenanceId);
 
       toast({
         title: "Demande d'intervention créée",
@@ -190,12 +196,17 @@ const MaintenancePage = () => {
         description: "Une erreur est survenue lors de la création de la demande",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
   
   // Handle form submission for edit maintenance
   const handleSubmitEditMaintenance = async (updatedData: any) => {
     try {
+      setIsProcessing(true);
+      
+      console.log("Updating maintenance request with data:", updatedData);
       // Update maintenance request
       await updateMaintenanceRequest(updatedData.id, updatedData);
       
@@ -217,6 +228,8 @@ const MaintenancePage = () => {
         description: "Une erreur est survenue lors de la mise à jour",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
   
@@ -299,6 +312,8 @@ const MaintenancePage = () => {
   // Handle update maintenance
   const handleUpdateMaintenance = async (updatedMaintenance: any) => {
     try {
+      setIsProcessing(true);
+      
       // Update maintenance request
       await updateMaintenanceRequest(updatedMaintenance.id, updatedMaintenance);
       
@@ -319,6 +334,8 @@ const MaintenancePage = () => {
         description: "Une erreur est survenue lors de la mise à jour",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -342,9 +359,18 @@ const MaintenancePage = () => {
         </div>
         
         <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
-          <Button onClick={() => setNewMaintenanceDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Nouvelle Intervention
+          <Button onClick={() => setNewMaintenanceDialogOpen(true)} disabled={isProcessing}>
+            {isProcessing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Traitement...
+              </>
+            ) : (
+              <>
+                <Plus className="mr-2 h-4 w-4" />
+                Nouvelle Intervention
+              </>
+            )}
           </Button>
           <div className="flex space-x-1">
             <Button variant="outline" onClick={handleExcelExport}>

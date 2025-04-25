@@ -1,8 +1,10 @@
 import { collection, addDoc, getDocs, query, where, orderBy, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../firebase';
+import { db } from '../firebase';
 import type { Maintenance } from '../schema';
 import { getCurrentUser } from '../auth';
+import { uploadToSupabase, isDataUrl, dataUrlToFile } from '../supabase';
+import { deleteFile } from './file-upload';
+import { removeDummyDoc } from './ensure-collections';
 
 // Get all maintenance requests
 export const getMaintenanceRequests = async (hotelId?: string) => {
@@ -12,10 +14,14 @@ export const getMaintenanceRequests = async (hotelId?: string) => {
       q = query(q, where('hotelId', '==', hotelId));
     }
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    })) as Maintenance[];
+    
+    // Filter out dummy_doc if it exists
+    return querySnapshot.docs
+      .filter(doc => doc.id !== 'dummy_doc')
+      .map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Maintenance[];
   } catch (error) {
     console.error('Error getting maintenance requests:', error);
     throw error;
@@ -25,6 +31,9 @@ export const getMaintenanceRequests = async (hotelId?: string) => {
 // Get a single maintenance request by ID
 export const getMaintenanceRequest = async (id: string) => {
   try {
+    // Si l'ID est dummy_doc, retourner null
+    if (id === 'dummy_doc') return null;
+    
     const docRef = doc(db, 'maintenance', id);
     const docSnap = await getDoc(docRef);
     
@@ -42,31 +51,11 @@ export const getMaintenanceRequest = async (id: string) => {
   }
 };
 
-// Upload a file to storage and get its URL
-async function uploadFile(file: File, path: string): Promise<string> {
-  try {
-    // Create a unique filename using timestamp and original name
-    const timestamp = Date.now();
-    const filename = `${timestamp}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const storageRef = ref(storage, `${path}/${filename}`);
-    
-    // Upload the file
-    const snapshot = await uploadBytes(storageRef, file);
-    
-    // Get the download URL
-    const downloadURL = await getDownloadURL(snapshot.ref);
-    return downloadURL;
-  } catch (error) {
-    console.error('Error uploading file:', error);
-    throw error;
-  }
-}
-
 // Create new maintenance request
 export const createMaintenanceRequest = async (data: Omit<Maintenance, 'id' | 'createdAt' | 'updatedAt'>) => {
   try {
     // Extract file fields if present
-    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, ...maintenanceData } = data as any;
+    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, hasQuote, ...maintenanceData } = data as any;
     
     // Get current user
     const currentUser = getCurrentUser();
@@ -87,29 +76,78 @@ export const createMaintenanceRequest = async (data: Omit<Maintenance, 'id' | 'c
       }]
     };
     
-    // Upload photoBefore if present
+    // Upload photoBefore to Supabase if present
     if (photoBefore instanceof File) {
-      const photoUrl = await uploadFile(photoBefore, 'maintenance/photos/before');
-      payload.photoBefore = photoUrl;
-    } else if (photoBeforePreview) {
-      payload.photoBefore = photoBeforePreview;
+      try {
+        console.log('Uploading photoBefore to Supabase');
+        const photoUrl = await uploadToSupabase(photoBefore, 'photoavant');
+        payload.photoBefore = photoUrl;
+      } catch (error) {
+        console.error('Error uploading photoBefore to Supabase:', error);
+        throw new Error(`Failed to upload 'before' photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoBeforePreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoBeforePreview, 'photoBefore.jpg');
+      if (file) {
+        try {
+          console.log('Uploading converted photoBefore to Supabase');
+          const photoUrl = await uploadToSupabase(file, 'photoavant');
+          payload.photoBefore = photoUrl;
+        } catch (error) {
+          console.error('Error uploading photoBefore from data URL to Supabase:', error);
+        }
+      }
     }
     
-    // Upload photoAfter if present
+    // Upload photoAfter to Supabase if present
     if (photoAfter instanceof File) {
-      const photoUrl = await uploadFile(photoAfter, 'maintenance/photos/after');
-      payload.photoAfter = photoUrl;
-    } else if (photoAfterPreview) {
-      payload.photoAfter = photoAfterPreview;
+      try {
+        console.log('Uploading photoAfter to Supabase');
+        const photoUrl = await uploadToSupabase(photoAfter, 'photoapres');
+        payload.photoAfter = photoUrl;
+      } catch (error) {
+        console.error('Error uploading photoAfter to Supabase:', error);
+        throw new Error(`Failed to upload 'after' photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoAfterPreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoAfterPreview, 'photoAfter.jpg');
+      if (file) {
+        try {
+          console.log('Uploading converted photoAfter to Supabase');
+          const photoUrl = await uploadToSupabase(file, 'photoapres');
+          payload.photoAfter = photoUrl;
+        } catch (error) {
+          console.error('Error uploading photoAfter from data URL to Supabase:', error);
+        }
+      }
     }
     
-    // Upload quote file if present
-    if (quoteFile instanceof File) {
-      const quoteUrl = await uploadFile(quoteFile, 'maintenance/quotes');
-      payload.quoteUrl = quoteUrl;
+    // Upload quote file to Supabase if present
+    if (hasQuote && quoteFile instanceof File) {
+      try {
+        console.log('Uploading quote file to Supabase');
+        const quoteUrl = await uploadToSupabase(quoteFile, 'devis');
+        payload.quoteUrl = quoteUrl;
+      } catch (error) {
+        console.error('Error uploading quote file to Supabase:', error);
+        throw new Error(`Failed to upload quote file: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     
+    // Essayer de supprimer le document dummy_doc s'il existe
+    try {
+      await removeDummyDoc('maintenance');
+    } catch (error) {
+      console.error('Error removing dummy document:', error);
+      // Ce n'est pas critique, on continue
+    }
+    
+    // Create maintenance request in Firestore
+    console.log('Creating maintenance request with payload', payload);
     const docRef = await addDoc(collection(db, 'maintenance'), payload);
+    console.log('Maintenance request created with ID:', docRef.id);
     return docRef.id;
   } catch (error) {
     console.error('Error creating maintenance request:', error);
@@ -123,11 +161,20 @@ const trackChanges = (oldData: any, newData: any) => {
   
   // Compare each field in the new data with the old data
   for (const [key, value] of Object.entries(newData)) {
-    // Skip history field, internal fields, and functions
-    if (key === 'history' || key === 'id' || key === 'createdAt' || key === 'updatedAt' || 
-        key === 'createdBy' || key === 'updatedBy' || typeof value === 'function' ||
-        key === 'photoBefore' || key === 'photoBeforePreview' || key === 'photoAfter' || 
-        key === 'photoAfterPreview' || key === 'quoteFile') {
+    // Skip fields that shouldn't be tracked
+    if (key === 'history' || 
+        key === 'id' || 
+        key === 'createdAt' || 
+        key === 'updatedAt' || 
+        key === 'createdBy' || 
+        key === 'updatedBy' || 
+        key === 'photoBefore' || 
+        key === 'photoBeforePreview' || 
+        key === 'photoAfter' || 
+        key === 'photoAfterPreview' || 
+        key === 'quoteFile' || 
+        key === 'hasQuote' ||
+        typeof value === 'function') {
       continue;
     }
     
@@ -155,6 +202,12 @@ const trackChanges = (oldData: any, newData: any) => {
 // Update maintenance request
 export const updateMaintenanceRequest = async (id: string, data: Partial<Maintenance>) => {
   try {
+    // Ignorer le document dummy
+    if (id === 'dummy_doc') {
+      console.log('Ignoring update for dummy document');
+      return;
+    }
+    
     // Get the current maintenance to track changes
     const docRef = doc(db, 'maintenance', id);
     const docSnap = await getDoc(docRef);
@@ -170,7 +223,7 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
     const userId = currentUser?.id || 'system';
     
     // Extract file fields if present
-    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, ...maintenanceData } = data as any;
+    const { photoBefore, photoBeforePreview, photoAfter, photoAfterPreview, quoteFile, hasQuote, ...maintenanceData } = data as any;
     
     // Create update payload
     const payload: any = { ...maintenanceData };
@@ -178,31 +231,146 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
     // Track what has changed
     const changes = trackChanges(oldData, payload);
     
-    // Upload photoBefore if present
+    // Upload photoBefore to Supabase if present
     if (photoBefore instanceof File) {
-      const photoUrl = await uploadFile(photoBefore, 'maintenance/photos/before');
-      payload.photoBefore = photoUrl;
-      changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
-    } else if (photoBeforePreview && photoBeforePreview !== oldData.photoBefore) {
+      try {
+        console.log('Uploading updated photoBefore to Supabase');
+        const photoUrl = await uploadToSupabase(photoBefore, 'photoavant');
+        
+        // Delete old photo if exists
+        if (oldData.photoBefore) {
+          await deleteFile(oldData.photoBefore);
+        }
+        
+        payload.photoBefore = photoUrl;
+        changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
+      } catch (error) {
+        console.error('Error uploading photoBefore to Supabase during update:', error);
+        throw new Error(`Failed to upload 'before' photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoBeforePreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoBeforePreview, 'photoBefore.jpg');
+      if (file) {
+        try {
+          console.log('Uploading converted photoBefore to Supabase during update');
+          const photoUrl = await uploadToSupabase(file, 'photoavant');
+          
+          // Delete old photo if exists
+          if (oldData.photoBefore) {
+            await deleteFile(oldData.photoBefore);
+          }
+          
+          payload.photoBefore = photoUrl;
+          changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
+        } catch (error) {
+          console.error('Error uploading photoBefore from data URL to Supabase during update:', error);
+        }
+      }
+    } else if (photoBeforePreview === '' && oldData.photoBefore) {
+      // Photo has been removed
+      await deleteFile(oldData.photoBefore);
+      payload.photoBefore = null;
+      changes['photoBefore'] = { old: oldData.photoBefore, new: null };
+    } else if (photoBeforePreview && typeof photoBeforePreview === 'string' && photoBeforePreview !== oldData.photoBefore) {
+      // It's a different URL, update it
+      
+      // Delete old photo if exists
+      if (oldData.photoBefore) {
+        await deleteFile(oldData.photoBefore);
+      }
+      
       payload.photoBefore = photoBeforePreview;
       changes['photoBefore'] = { old: oldData.photoBefore || null, new: 'Updated' };
     }
     
-    // Upload photoAfter if present
+    // Upload photoAfter to Supabase if present
     if (photoAfter instanceof File) {
-      const photoUrl = await uploadFile(photoAfter, 'maintenance/photos/after');
-      payload.photoAfter = photoUrl;
-      changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
-    } else if (photoAfterPreview && photoAfterPreview !== oldData.photoAfter) {
+      try {
+        console.log('Uploading updated photoAfter to Supabase');
+        const photoUrl = await uploadToSupabase(photoAfter, 'photoapres');
+        
+        // Delete old photo if exists
+        if (oldData.photoAfter) {
+          await deleteFile(oldData.photoAfter);
+        }
+        
+        payload.photoAfter = photoUrl;
+        changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
+      } catch (error) {
+        console.error('Error uploading photoAfter to Supabase during update:', error);
+        throw new Error(`Failed to upload 'after' photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoAfterPreview)) {
+      // Convert data URL to File and upload to Supabase
+      const file = await dataUrlToFile(photoAfterPreview, 'photoAfter.jpg');
+      if (file) {
+        try {
+          console.log('Uploading converted photoAfter to Supabase during update');
+          const photoUrl = await uploadToSupabase(file, 'photoapres');
+          
+          // Delete old photo if exists
+          if (oldData.photoAfter) {
+            await deleteFile(oldData.photoAfter);
+          }
+          
+          payload.photoAfter = photoUrl;
+          changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
+        } catch (error) {
+          console.error('Error uploading photoAfter from data URL to Supabase during update:', error);
+        }
+      }
+    } else if (photoAfterPreview === '' && oldData.photoAfter) {
+      // Photo has been removed
+      await deleteFile(oldData.photoAfter);
+      payload.photoAfter = null;
+      changes['photoAfter'] = { old: oldData.photoAfter, new: null };
+    } else if (photoAfterPreview && typeof photoAfterPreview === 'string' && photoAfterPreview !== oldData.photoAfter) {
+      // It's a different URL, update it
+      
+      // Delete old photo if exists
+      if (oldData.photoAfter) {
+        await deleteFile(oldData.photoAfter);
+      }
+      
       payload.photoAfter = photoAfterPreview;
       changes['photoAfter'] = { old: oldData.photoAfter || null, new: 'Updated' };
     }
     
-    // Upload quote file if present
+    // Upload quote file to Supabase if present
     if (quoteFile instanceof File) {
-      const quoteUrl = await uploadFile(quoteFile, 'maintenance/quotes');
-      payload.quoteUrl = quoteUrl;
-      changes['quoteUrl'] = { old: oldData.quoteUrl || null, new: 'Updated' };
+      try {
+        console.log('Uploading updated quote file to Supabase');
+        const quoteUrl = await uploadToSupabase(quoteFile, 'devis');
+        
+        // Delete old quote if exists
+        if (oldData.quoteUrl) {
+          await deleteFile(oldData.quoteUrl);
+        }
+        
+        payload.quoteUrl = quoteUrl;
+        changes['quoteUrl'] = { old: oldData.quoteUrl || null, new: 'Updated' };
+      } catch (error) {
+        console.error('Error uploading quote file to Supabase during update:', error);
+        throw new Error(`Failed to upload quote file: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    
+    // Handle the hasQuote flag - if it's false, clear quote-related fields
+    if (hasQuote === false) {
+      // Delete the quote file if it exists
+      if (oldData.quoteUrl) {
+        await deleteFile(oldData.quoteUrl);
+      }
+      
+      payload.quoteUrl = null;
+      payload.quoteAmount = null;
+      payload.quoteAccepted = false;
+      
+      // Track these changes
+      if (oldData.quoteUrl) changes['quoteUrl'] = { old: oldData.quoteUrl, new: null };
+      if (oldData.quoteAmount) changes['quoteAmount'] = { old: oldData.quoteAmount, new: null };
+      if (oldData.quoteAccepted) changes['quoteAccepted'] = { old: oldData.quoteAccepted, new: false };
     }
     
     // Create a history entry if there are changes
@@ -224,8 +392,10 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
     payload.updatedAt = new Date().toISOString();
     payload.updatedBy = userId;
     
-    // Update the document
+    // Update the document in Firestore
+    console.log('Updating maintenance request with payload', payload);
     await updateDoc(docRef, payload);
+    console.log('Maintenance request updated successfully');
   } catch (error) {
     console.error('Error updating maintenance request:', error);
     throw error;
@@ -235,6 +405,12 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
 // Delete maintenance request
 export const deleteMaintenanceRequest = async (id: string) => {
   try {
+    // Ignorer le document dummy
+    if (id === 'dummy_doc') {
+      console.log('Ignoring delete for dummy document');
+      return;
+    }
+    
     // Get current user
     const currentUser = getCurrentUser();
     const userId = currentUser?.id || 'system';
@@ -248,6 +424,34 @@ export const deleteMaintenanceRequest = async (id: string) => {
     }
     
     const oldData = docSnap.data();
+    
+    // Delete associated files
+    if (oldData.photoBefore) {
+      try {
+        await deleteFile(oldData.photoBefore);
+        console.log('Before photo deleted successfully');
+      } catch (error) {
+        console.error('Error deleting before photo:', error);
+      }
+    }
+    
+    if (oldData.photoAfter) {
+      try {
+        await deleteFile(oldData.photoAfter);
+        console.log('After photo deleted successfully');
+      } catch (error) {
+        console.error('Error deleting after photo:', error);
+      }
+    }
+    
+    if (oldData.quoteUrl) {
+      try {
+        await deleteFile(oldData.quoteUrl);
+        console.log('Quote file deleted successfully');
+      } catch (error) {
+        console.error('Error deleting quote file:', error);
+      }
+    }
     
     // Add deletion to history
     const historyEntry = {

@@ -1,8 +1,9 @@
 import { collection, addDoc, getDocs, query, where, orderBy, deleteDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../firebase';
+import { db } from '../firebase';
 import type { Incident } from '../schema';
 import { getCurrentUser } from '../auth';
+import { uploadToSupabase, isDataUrl, dataUrlToFile } from '../supabase';
+import { deleteFile } from './file-upload';
 
 // Get all incidents
 export const getIncidents = async (hotelId?: string) => {
@@ -42,26 +43,6 @@ export const getIncident = async (id: string) => {
   }
 };
 
-// Upload a file to storage and get its URL
-async function uploadFile(file: File, path: string): Promise<string> {
-  try {
-    // Create a unique filename using timestamp and original name
-    const timestamp = Date.now();
-    const filename = `${timestamp}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-    const storageRef = ref(storage, `${path}/${filename}`);
-    
-    // Upload the file
-    const snapshot = await uploadBytes(storageRef, file);
-    
-    // Get the download URL
-    const downloadURL = await getDownloadURL(snapshot.ref);
-    return downloadURL;
-  } catch (error) {
-    console.error('Error uploading file:', error);
-    throw error;
-  }
-}
-
 // Create new incident
 export const createIncident = async (data: any) => {
   try {
@@ -89,21 +70,48 @@ export const createIncident = async (data: any) => {
       }]
     };
 
-    // Upload photo if present
+    // Process photo upload to Supabase
     if (photo instanceof File) {
-      const photoUrl = await uploadFile(photo, 'incidents/photos');
-      incidentPayload.photoUrl = photoUrl;
+      try {
+        const photoUrl = await uploadToSupabase(photo, 'photoavant');
+        incidentPayload.photoUrl = photoUrl;
+        console.log('Photo URL saved:', photoUrl);
+      } catch (error) {
+        console.error('Error uploading photo to Supabase:', error);
+        throw new Error(`Failed to upload photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoPreview)) {
+      // If it's a data URL, convert to file and upload
+      const file = await dataUrlToFile(photoPreview, 'incident_photo.jpg');
+      if (file) {
+        try {
+          const photoUrl = await uploadToSupabase(file, 'photoavant');
+          incidentPayload.photoUrl = photoUrl;
+          console.log('Photo URL saved from data URL:', photoUrl);
+        } catch (error) {
+          console.error('Error uploading photo from data URL to Supabase:', error);
+        }
+      }
     }
-
-    // Upload document if present
+    
+    // Process document upload
     if (document instanceof File) {
-      const documentUrl = await uploadFile(document, 'incidents/documents');
-      incidentPayload.documentUrl = documentUrl;
-      incidentPayload.documentName = documentName;
+      try {
+        const docUrl = await uploadToSupabase(document, 'devis');
+        
+        incidentPayload.documentUrl = docUrl;
+        incidentPayload.documentName = documentName || document.name;
+        console.log('Document URL saved:', docUrl);
+      } catch (error) {
+        console.error('Error uploading document to Supabase:', error);
+        throw new Error(`Failed to upload document: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
-
-    // Create incident document
+    
+    // Create incident document in Firestore
     const docRef = await addDoc(collection(db, 'incidents'), incidentPayload);
+    console.log('Incident created with ID:', docRef.id);
+    
     return docRef.id;
   } catch (error) {
     console.error('Error creating incident:', error);
@@ -117,9 +125,18 @@ const trackChanges = (oldData: any, newData: any) => {
   
   // Compare each field in the new data with the old data
   for (const [key, value] of Object.entries(newData)) {
-    // Skip history field, internal fields, and functions
-    if (key === 'history' || key === 'id' || key === 'createdAt' || key === 'updatedAt' || 
-        key === 'createdBy' || key === 'updatedBy' || typeof value === 'function') {
+    // Skip fields that should not be tracked
+    if (key === 'history' || 
+        key === 'id' || 
+        key === 'createdAt' || 
+        key === 'updatedAt' || 
+        key === 'createdBy' || 
+        key === 'updatedBy' || 
+        key === 'photo' || 
+        key === 'photoPreview' || 
+        key === 'document' || 
+        key === 'documentName' || 
+        typeof value === 'function') {
       continue;
     }
     
@@ -157,41 +174,110 @@ export const updateIncident = async (id: string, data: Partial<Incident>) => {
     
     const oldData = docSnap.data();
     
+    // Extract file fields if present
+    const { photo, photoPreview, document, documentName, ...incidentData } = data as any;
+    
     // Get current user
     const currentUser = getCurrentUser();
     const userId = currentUser?.id || 'system';
     
     // Track what has changed
-    const changes = trackChanges(oldData, data);
+    const changes = trackChanges(oldData, incidentData);
     
     // Check if concludedById was set and set timestamp
     let concludedAt = oldData.concludedAt;
-    if (data.concludedById && !oldData.concludedById) {
+    if (incidentData.concludedById && !oldData.concludedById) {
       concludedAt = new Date().toISOString();
-    } else if (data.concludedById === null && oldData.concludedById) {
+    } else if (incidentData.concludedById === null && oldData.concludedById) {
       concludedAt = null;
     }
     
-    // Create a history entry
-    const historyEntry = {
-      timestamp: new Date().toISOString(),
-      userId,
-      action: 'update',
-      changes
-    };
+    // Create update payload
+    const payload: any = { ...incidentData, concludedAt };
     
-    // Update the history array
-    const history = oldData.history || [];
-    history.push(historyEntry);
+    // Process photo upload to Supabase
+    if (photo instanceof File) {
+      try {
+        // Upload new photo
+        const photoUrl = await uploadToSupabase(photo, 'photoavant');
+        payload.photoUrl = photoUrl;
+        
+        // Delete old photo if exists
+        if (oldData.photoUrl) {
+          await deleteFile(oldData.photoUrl);
+        }
+        
+        if (!changes['photoUrl'] && photoUrl !== oldData.photoUrl) {
+          changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+        }
+      } catch (error) {
+        console.error('Error uploading photo to Supabase during update:', error);
+        throw new Error(`Failed to update photo: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (isDataUrl(photoPreview)) {
+      // If it's a data URL, convert to file and upload to Supabase
+      const file = await dataUrlToFile(photoPreview, 'incident_photo.jpg');
+      if (file) {
+        try {
+          const photoUrl = await uploadToSupabase(file, 'photoavant');
+          
+          // Delete old photo if exists
+          if (oldData.photoUrl) {
+            await deleteFile(oldData.photoUrl);
+          }
+          
+          payload.photoUrl = photoUrl;
+          changes['photoUrl'] = { old: oldData.photoUrl || null, new: 'Updated' };
+        } catch (error) {
+          console.error('Error uploading photo from data URL to Supabase during update:', error);
+        }
+      }
+    }
     
-    // Update the document with new data and history
-    await updateDoc(docRef, {
-      ...data,
-      concludedAt,
-      updatedAt: new Date().toISOString(),
-      updatedBy: userId,
-      history
-    });
+    // Process document upload to Supabase
+    if (document instanceof File) {
+      try {
+        const docUrl = await uploadToSupabase(document, 'devis');
+        
+        // Delete old document if exists
+        if (oldData.documentUrl) {
+          await deleteFile(oldData.documentUrl);
+        }
+        
+        payload.documentUrl = docUrl;
+        payload.documentName = documentName || document.name;
+        changes['documentUrl'] = { old: oldData.documentUrl || null, new: 'Updated' };
+        if (documentName !== oldData.documentName) {
+          changes['documentName'] = { old: oldData.documentName || null, new: documentName || document.name };
+        }
+      } catch (error) {
+        console.error('Error uploading document to Supabase during update:', error);
+        throw new Error(`Failed to update document: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    
+    // Create a history entry if there are changes
+    if (Object.keys(changes).length > 0) {
+      const historyEntry = {
+        timestamp: new Date().toISOString(),
+        userId,
+        action: 'update',
+        changes
+      };
+      
+      // Update the history array
+      const history = oldData.history || [];
+      history.push(historyEntry);
+      payload.history = history;
+    }
+    
+    // Update timestamps and user
+    payload.updatedAt = new Date().toISOString();
+    payload.updatedBy = userId;
+    
+    // Update the document in Firestore
+    await updateDoc(docRef, payload);
+    console.log('Incident updated successfully');
   } catch (error) {
     console.error('Error updating incident:', error);
     throw error;
@@ -214,6 +300,25 @@ export const deleteIncident = async (id: string) => {
     }
     
     const oldData = docSnap.data();
+    
+    // Delete associated files (photo and document)
+    if (oldData.photoUrl) {
+      try {
+        await deleteFile(oldData.photoUrl);
+        console.log('Photo deleted successfully');
+      } catch (error) {
+        console.error('Error deleting photo:', error);
+      }
+    }
+    
+    if (oldData.documentUrl) {
+      try {
+        await deleteFile(oldData.documentUrl);
+        console.log('Document deleted successfully');
+      } catch (error) {
+        console.error('Error deleting document:', error);
+      }
+    }
     
     // Add deletion to history
     const historyEntry = {

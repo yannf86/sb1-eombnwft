@@ -138,3 +138,28 @@ export function getRandomNumber(min: number, max: number): number {
 export function generateRandomId(): string {
   return Math.random().toString(36).substring(2, 15);
 }
+
+// Helper function to convert a data URL to a File object
+export async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File | null> {
+  try {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      console.warn('Invalid data URL format');
+      return null;
+    }
+    
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const mimeType = blob.type || 'image/jpeg'; // Default to JPEG if type is missing
+    
+    return new File([blob], fileName, { type: mimeType });
+  } catch (error) {
+    console.error('Error converting data URL to File:', error);
+    return null;
+  }
+}
+
+// Helper function to check if a value is a valid Data URL
+export function isDataUrl(value: any): boolean {
+  if (typeof value !== 'string') return false;
+  return value.startsWith('data:');
+}
