@@ -17,6 +17,9 @@ import { getUsers, getUsersByHotel } from '@/lib/db/users';
 import { useDate } from '@/hooks/use-date';
 import { useToast } from '@/hooks/use-toast';
 import { findStatusIdByCode } from '@/lib/db/parameters-status';
+import { Loader2, Image, X } from 'lucide-react';
+import { deleteFromSupabase } from '@/lib/supabase';
+import PhotoDisplay from '@/components/maintenance/PhotoDisplay';
 
 interface IncidentFormProps {
   isOpen: boolean;
@@ -66,6 +69,7 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
   
   const { toast } = useToast();
   const currentUser = getCurrentUser();
@@ -74,7 +78,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
   useEffect(() => {
     if (isEditing && incident) {
       setFormData({
-        ...incident
+        ...incident,
+        photoPreview: incident.photoUrl || ''
       });
     } else {
       // Pour un nouvel incident, on essaie de trouver le statut "ouvert" par défaut
@@ -210,16 +215,6 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
     loadFilteredUsers();
   }, [formData.hotelId, users, toast]);
 
-  // Set receivedById to current user's ID if not already set
-  useEffect(() => {
-    if (currentUser && !formData.receivedById && !isEditing) {
-      setFormData(prev => ({
-        ...prev,
-        receivedById: currentUser.id
-      }));
-    }
-  }, [currentUser, formData.receivedById, isEditing]);
-
   // Use the date hook for incident date
   const incidentDate = useDate({
     defaultDate: formData.date,
@@ -239,11 +234,6 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
     required: false
   });
 
-  // Filter hotels based on user role
-  const filteredHotels = currentUser?.role === 'admin' 
-    ? hotels 
-    : hotels.filter(hotel => currentUser?.hotels?.includes(hotel.id));
-
   // Handle form input changes
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -251,6 +241,123 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
       ...prev,
       [name]: value
     }));
+  };
+
+  // Handle select changes
+  const handleSelectChange = (name: string, value: string | null) => {
+    if (name === 'hotelId') {
+      // When hotel changes, reset locationId and concludedById
+      setFormData(prev => ({
+        ...prev,
+        [name]: value,
+        locationId: '',
+        concludedById: null
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value === "none" ? null : value
+      }));
+    }
+  };
+
+  // Handle file upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setPhotoUploading(true);
+      
+      // Validate file size (max 2MB)
+      if (file.size > 2 * 1024 * 1024) {
+        toast({
+          title: "Fichier trop volumineux",
+          description: "La taille du fichier ne doit pas dépasser 2MB",
+          variant: "destructive",
+        });
+        setPhotoUploading(false);
+        return;
+      }
+
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        toast({
+          title: "Format de fichier incorrect",
+          description: "Veuillez sélectionner un fichier image (JPG, PNG, etc.)",
+          variant: "destructive",
+        });
+        setPhotoUploading(false);
+        return;
+      }
+
+      // Read file and create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({
+          ...prev,
+          photo: file,
+          photoPreview: reader.result as string
+        }));
+        setPhotoUploading(false);
+      };
+      reader.onerror = () => {
+        setPhotoUploading(false);
+        toast({
+          title: "Erreur de lecture",
+          description: "Impossible de lire le fichier sélectionné",
+          variant: "destructive",
+        });
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      setPhotoUploading(false);
+      console.error('Error handling file upload:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors du traitement du fichier",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle delete photo
+  const handleDeletePhoto = async () => {
+    try {
+      // If editing and there's an existing photo URL, delete from Supabase
+      if (isEditing && incident?.photoUrl) {
+        console.log('🗑️ Deleting photo from Supabase:', incident.photoUrl);
+        const success = await deleteFromSupabase(incident.photoUrl);
+        if (success) {
+          console.log('✅ Photo deleted successfully from Supabase');
+          toast({
+            title: "Photo supprimée",
+            description: "La photo a été supprimée avec succès"
+          });
+        } else {
+          console.error('❌ Failed to delete photo from Supabase');
+          toast({
+            title: "Avertissement",
+            description: "La photo a été retirée du formulaire mais peut-être pas du stockage",
+            variant: "destructive"
+          });
+        }
+      }
+
+      // Update form data
+      setFormData(prev => ({
+        ...prev,
+        photo: null,
+        photoPreview: ''
+      }));
+    } catch (error) {
+      console.error('Error deleting photo:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression de la photo",
+        variant: "destructive"
+      });
+    }
   };
 
   // Handle form submission
@@ -321,7 +428,8 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
           <DialogHeader>
             <DialogTitle>Chargement...</DialogTitle>
           </DialogHeader>
-          <div className="py-6">
+          <div className="py-6 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mb-2 text-brand-500" />
             <p>Chargement des données en cours...</p>
           </div>
         </DialogContent>
@@ -360,7 +468,6 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 Hôtel
               </Label>
               <Select 
-                name="hotelId" 
                 value={formData.hotelId} 
                 onValueChange={(value) => {
                   setFormData(prev => ({
@@ -413,11 +520,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   ) : locations.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun lieu disponible</SelectItem>
                   ) : (
-                    locations
-                      .filter(location => location.id && location.id !== '')
-                      .map(location => (
-                        <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
-                      ))
+                    locations.map(location => (
+                      <SelectItem key={location.id} value={location.id}>{location.label}</SelectItem>
+                    ))
                   )}
                 </SelectContent>
               </Select>
@@ -443,11 +548,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   {categories.length === 0 ? (
                     <SelectItem value="none" disabled>Aucune catégorie disponible</SelectItem>
                   ) : (
-                    categories
-                      .filter(category => category.id && category.id !== '')
-                      .map(category => (
-                        <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
-                      ))
+                    categories.map(category => (
+                      <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                    ))
                   )}
                 </SelectContent>
               </Select>
@@ -471,11 +574,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   {impacts.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun niveau d'impact disponible</SelectItem>
                   ) : (
-                    impacts
-                      .filter(impact => impact.id && impact.id !== '')
-                      .map(impact => (
-                        <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
-                      ))
+                    impacts.map(impact => (
+                      <SelectItem key={impact.id} value={impact.id}>{impact.label}</SelectItem>
+                    ))
                   )}
                 </SelectContent>
               </Select>
@@ -493,6 +594,45 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
               value={formData.description}
               onChange={handleFormChange}
             />
+          </div>
+
+          {/* Photo de l'incident */}
+          <div className="space-y-2">
+            <Label htmlFor="photo">Photo de l'incident</Label>
+            {photoUploading ? (
+              <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                  <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                </div>
+              </div>
+            ) : formData.photoPreview ? (
+              <PhotoDisplay 
+                photoUrl={formData.photoPreview}
+                type="before"
+                onDelete={handleDeletePhoto}
+                altText="Photo de l'incident"
+              />
+            ) : (
+              <div className="flex items-center justify-center w-full">
+                <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 dark:hover:bg-bray-800 dark:bg-gray-700 dark:border-gray-600 dark:hover:border-gray-500 dark:hover:bg-gray-600">
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <Image className="w-8 h-8 mb-3 text-gray-400" />
+                    <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                      <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">PNG, JPG (MAX. 2MB)</p>
+                  </div>
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    disabled={photoUploading}
+                  />
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -528,7 +668,13 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                 disabled={loadingUsers}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={loadingUsers ? "Chargement..." : "Sélectionnez un utilisateur"} />
+                  <SelectValue placeholder={
+                    !formData.hotelId
+                      ? "Sélectionnez d'abord un hôtel"
+                      : loadingUsers
+                        ? "Chargement..."
+                        : "Sélectionnez un utilisateur"
+                  } />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">En Attente</SelectItem>
@@ -537,11 +683,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   ) : filteredUsers.length === 0 ? (
                     <SelectItem value="empty" disabled>Aucun utilisateur disponible</SelectItem>
                   ) : (
-                    filteredUsers
-                      .filter(user => user.id && user.id !== '')
-                      .map(user => (
-                        <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                      ))
+                    filteredUsers.map(user => (
+                      <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                    ))
                   )}
                 </SelectContent>
               </Select>
@@ -567,11 +711,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   {statuses.length === 0 ? (
                     <SelectItem value="none" disabled>Aucun statut disponible</SelectItem>
                   ) : (
-                    statuses
-                      .filter(status => status.id && status.id !== '')
-                      .map(status => (
-                        <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
-                      ))
+                    statuses.map(status => (
+                      <SelectItem key={status.id} value={status.id}>{status.label}</SelectItem>
+                    ))
                   )}
                 </SelectContent>
               </Select>
@@ -663,11 +805,9 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Non spécifié</SelectItem>
-                    {bookingOrigins
-                      .filter(origin => origin.id && origin.id !== '')
-                      .map(origin => (
-                        <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
-                      ))}
+                    {bookingOrigins.map(origin => (
+                      <SelectItem key={origin.id} value={origin.id}>{origin.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -676,11 +816,18 @@ const IncidentForm: React.FC<IncidentFormProps> = ({
         </div>
         
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} disabled={photoUploading}>
             Annuler
           </Button>
-          <Button onClick={handleSubmit}>
-            {isEditing ? 'Enregistrer les modifications' : 'Créer l\'incident'}
+          <Button onClick={handleSubmit} disabled={photoUploading}>
+            {photoUploading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Traitement...
+              </>
+            ) : (
+              isEditing ? 'Enregistrer les modifications' : 'Créer l\'incident'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -64,49 +64,42 @@ export const extractPathFromSupabaseUrl = (url: string): { bucket: string | null
     // Debug the URL we're trying to parse
     console.log('🔍 Extracting path from Supabase URL:', url);
     
-    // Direct regex pattern to extract both the bucket and path
-    // Format: https://<base-url>/storage/v1/object/public/<bucket>/<path>
-    const complexPattern = /\/storage\/v1\/object\/public\/([^/]+)\/(.+?)(?:\?.*)?$/;
-    const complexMatch = url.match(complexPattern);
-    
-    if (complexMatch && complexMatch.length >= 3) {
-      return { 
-        bucket: complexMatch[1], 
-        path: complexMatch[2]
-      };
+    if (!url) {
+      return { bucket: null, path: null };
     }
     
-    // Alternate pattern for different URL format
-    // Format: https://<base-url>/public/<bucket>/<path>
-    const simplePattern = /\/public\/([^/]+)\/(.+?)(?:\?.*)?$/;
-    const simpleMatch = url.match(simplePattern);
+    // Remove query parameters if present
+    const cleanUrl = url.split('?')[0];
     
-    if (simpleMatch && simpleMatch.length >= 3) {
-      return { 
-        bucket: simpleMatch[1], 
-        path: simpleMatch[2]
-      };
-    }
-    
-    // If all patterns fail, manually check each known bucket
+    // Find which bucket the file belongs to by checking the URL
+    let bucket = null;
     const buckets = ['photoavant', 'photoapres', 'devis', 'objettrouve'];
-    for (const bucket of buckets) {
-      if (url.includes(`/${bucket}/`)) {
-        // Try to extract everything after the bucket name
-        const bucketPattern = new RegExp(`/${bucket}/(.+?)(?:\\?.*)?$`);
-        const bucketMatch = url.match(bucketPattern);
-        
-        if (bucketMatch && bucketMatch.length >= 2) {
-          return {
-            bucket,
-            path: bucketMatch[1]
-          };
-        }
+    
+    for (const b of buckets) {
+      if (url.includes(`/${b}/`)) {
+        bucket = b;
+        break;
       }
     }
     
-    console.warn('⚠️ Could not extract path from URL using any pattern:', url);
-    return { bucket: null, path: null };
+    if (!bucket) {
+      console.warn('⚠️ Could not determine bucket from URL:', url);
+      return { bucket: null, path: null };
+    }
+    
+    // Extract the file name from the URL
+    // The file name is typically the last segment of the path
+    const pathSegments = cleanUrl.split('/');
+    const fileName = pathSegments[pathSegments.length - 1];
+    
+    if (!fileName) {
+      console.warn('⚠️ Could not extract filename from URL:', url);
+      return { bucket: null, path: null };
+    }
+    
+    console.log(`✅ Extracted bucket: ${bucket}, filename: ${fileName}`);
+    return { bucket, path: fileName };
+    
   } catch (error) {
     console.error('❌ Error extracting path from URL:', error, url);
     return { bucket: null, path: null };
@@ -187,24 +180,4 @@ export const dataUrlToFile = async (dataUrl: string, fileName: string): Promise<
     console.error('❌ Error converting data URL to File:', error);
     return null;
   }
-};
-
-/**
- * Get the bucket name from a file path
- * @param path File path or URL
- * @returns Appropriate bucket name
- */
-export const getBucketFromPath = (path: string): string => {
-  if (path.includes('objettrouve') || path.includes('lost_items')) {
-    return 'objettrouve';
-  } else if (path.includes('before') || path.includes('incidents/photos')) {
-    return 'photoavant';
-  } else if (path.includes('after')) {
-    return 'photoapres';
-  } else if (path.includes('quote') || path.includes('devis') || path.includes('documents')) {
-    return 'devis';
-  }
-  
-  // Default
-  return 'photoavant';
 };

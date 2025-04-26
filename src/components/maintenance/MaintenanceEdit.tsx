@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Image, FileUp, X, Loader2 } from 'lucide-react';
+import { Loader2, Image, X, FileUp } from 'lucide-react';
 import { users } from '@/lib/data';
 import { Maintenance, MaintenanceEditFormData } from './types/maintenance.types';
 import { getHotels } from '@/lib/db/hotels';
@@ -15,6 +15,8 @@ import { getStatusParameters } from '@/lib/db/parameters-status';
 import { useToast } from '@/hooks/use-toast';
 import { updateMaintenanceRequest } from '@/lib/db/maintenance';
 import { deleteFromSupabase } from '@/lib/supabase';
+import QuoteFileDisplay from './QuoteFileDisplay';
+import PhotoDisplay from './PhotoDisplay';
 
 interface MaintenanceEditProps {
   isOpen: boolean;
@@ -31,9 +33,7 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
 }) => {
   const [formData, setFormData] = useState<MaintenanceEditFormData>({
     ...maintenance,
-    photoBefore: null,
     photoBeforePreview: maintenance.photoBefore || '',
-    photoAfter: null,
     photoAfterPreview: maintenance.photoAfter || '',
     quoteFile: null
   });
@@ -54,6 +54,26 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
     user.role === 'admin' || 
     (user.hotels && user.hotels.includes(formData.hotelId))
   );
+
+  // Initialize the quote status from legacy data if needed
+  useEffect(() => {
+    if (!formData.quoteStatus && formData.quoteAccepted !== undefined) {
+      setFormData(prev => ({
+        ...prev,
+        quoteStatus: formData.quoteAccepted ? 'accepted' : 'rejected'
+      }));
+    } else if (!formData.quoteStatus && formData.quoteUrl) {
+      setFormData(prev => ({
+        ...prev,
+        quoteStatus: 'pending'
+      }));
+    } else if (!formData.quoteStatus) {
+      setFormData(prev => ({
+        ...prev,
+        quoteStatus: 'pending'
+      }));
+    }
+  }, [formData.quoteStatus, formData.quoteAccepted, formData.quoteUrl]);
 
   // Load data on mount
   useEffect(() => {
@@ -268,6 +288,45 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
     }
   };
 
+  // Handle delete quote file
+  const handleDeleteQuoteFile = async () => {
+    try {
+      // If we have an existing quote URL, delete it from Supabase
+      if (maintenance?.quoteUrl) {
+        console.log('🗑️ Deleting quote file from Supabase:', maintenance.quoteUrl);
+        const success = await deleteFromSupabase(maintenance.quoteUrl);
+        if (success) {
+          console.log('✅ Quote file deleted successfully from Supabase');
+          toast({
+            title: "Devis supprimé",
+            description: "Le fichier de devis a été supprimé avec succès",
+          });
+        } else {
+          console.error('❌ Failed to delete quote file from Supabase');
+          toast({
+            title: "Avertissement",
+            description: "Le devis a été retiré du formulaire mais peut-être pas du stockage",
+            variant: "destructive",
+          });
+        }
+      }
+      
+      // Update form data
+      setFormData(prev => ({
+        ...prev,
+        quoteUrl: '',
+        quoteFile: null
+      }));
+    } catch (error) {
+      console.error('Error deleting quote file:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression du fichier de devis",
+        variant: "destructive",
+      });
+    }
+  };
+
   // Handle form submission
   const handleSubmit = async () => {
     try {
@@ -279,14 +338,9 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
       // Create updated maintenance object for parent component
       const updatedMaintenance: Maintenance = {
         ...formData,
-        photoBefore: formData.photoBeforePreview || undefined,
-        photoAfter: formData.photoAfterPreview || undefined,
         // Remove file properties that shouldn't be part of the Maintenance type
-        photoBefore: undefined,
-        photoAfter: undefined,
-        photoBeforePreview: undefined,
-        photoAfterPreview: undefined,
-        quoteFile: undefined,
+        photoBefore: formData.photoBeforePreview || null,
+        photoAfter: formData.photoAfterPreview || null
       } as any;
       
       toast({
@@ -313,9 +367,6 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>Chargement...</DialogTitle>
-            <DialogDescription>
-              Veuillez patienter pendant le chargement des données
-            </DialogDescription>
           </DialogHeader>
           <div className="py-6 text-center">
             <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
@@ -450,21 +501,11 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                     </div>
                   </div>
                 ) : formData.photoBeforePreview ? (
-                  <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
-                    <img 
-                      src={formData.photoBeforePreview} 
-                      alt="Aperçu avant" 
-                      className="w-full h-full object-contain"
-                    />
-                    <Button 
-                      variant="destructive" 
-                      size="sm" 
-                      className="absolute top-2 right-2"
-                      onClick={handleDeletePhotoBefore}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <PhotoDisplay 
+                    photoUrl={formData.photoBeforePreview}
+                    type="before"
+                    onDelete={handleDeletePhotoBefore}
+                  />
                 ) : (
                   <div className="flex items-center justify-center w-full">
                     <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
@@ -494,21 +535,11 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                     </div>
                   </div>
                 ) : formData.photoAfterPreview ? (
-                  <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
-                    <img 
-                      src={formData.photoAfterPreview} 
-                      alt="Aperçu après" 
-                      className="w-full h-full object-contain"
-                    />
-                    <Button 
-                      variant="destructive" 
-                      size="sm" 
-                      className="absolute top-2 right-2"
-                      onClick={handleDeletePhotoAfter}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <PhotoDisplay 
+                    photoUrl={formData.photoAfterPreview}
+                    type="after"
+                    onDelete={handleDeletePhotoAfter}
+                  />
                 ) : (
                   <div className="flex items-center justify-center w-full">
                     <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
@@ -533,41 +564,58 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
             <div className="flex items-center space-x-2">
               <Switch 
                 id="hasQuote" 
-                checked={Boolean(formData.quoteUrl)}
-                onCheckedChange={(checked) => handleSwitchChange('quoteUrl', checked)}
+                checked={Boolean(formData.quoteUrl || formData.quoteFile)}
+                onCheckedChange={(checked) => {
+                  if (!checked && formData.quoteUrl) {
+                    handleDeleteQuoteFile();
+                  } else {
+                    handleSwitchChange('quoteUrl', checked);
+                  }
+                }}
               />
               <Label htmlFor="hasQuote">Devis disponible</Label>
             </div>
             
             {(formData.quoteUrl || formData.quoteFile) && (
               <>
+                {/* Affiche le fichier de devis existant */}
+                {formData.quoteUrl && !formData.quoteFile && (
+                  <QuoteFileDisplay 
+                    quoteUrl={formData.quoteUrl}
+                    onDelete={handleDeleteQuoteFile}
+                  />
+                )}
+
                 <div className="space-y-2">
-                  <Label htmlFor="quoteFile">Fichier du devis</Label>
+                  <Label htmlFor="quoteFile">Fichier du devis {formData.quoteUrl ? '(remplacer)' : ''}</Label>
                   <div className="flex items-center justify-center w-full">
                     <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
                       <div className="flex flex-col items-center justify-center pt-5 pb-6">
                         <FileUp className="w-6 h-6 mb-2 text-gray-400" />
-                        <p className="text-sm text-gray-500">
-                          <span className="font-semibold">Cliquez pour uploader le devis</span>
-                        </p>
+                        <p className="text-xs text-gray-500">Cliquez pour uploader le devis</p>
+                        <p className="text-xs text-gray-500">PDF, DOC, DOCX (MAX. 5MB)</p>
                       </div>
                       <input 
                         type="file" 
                         className="hidden" 
-                        accept=".pdf,.doc,.docx"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         onChange={(e) => handleFileUpload(e, 'quoteFile')}
                       />
                     </label>
                   </div>
                   {formData.quoteFile && (
-                    <p className="text-sm text-green-600">
-                      Fichier sélectionné: {formData.quoteFile.name}
-                    </p>
-                  )}
-                  {formData.quoteUrl && !formData.quoteFile && (
-                    <p className="text-sm text-blue-600">
-                      Devis actuel: {formData.quoteUrl.split('/').pop()}
-                    </p>
+                    <div className="flex justify-between items-center mt-2 p-2 bg-blue-50 rounded">
+                      <p className="text-sm text-blue-600">
+                        Fichier sélectionné: {formData.quoteFile.name} ({(formData.quoteFile.size / 1024).toFixed(0)} KB)
+                      </p>
+                      <Button 
+                        variant="destructive" 
+                        size="sm"
+                        onClick={() => setFormData(prev => ({ ...prev, quoteFile: null }))}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
                   )}
                 </div>
                 
@@ -585,17 +633,20 @@ const MaintenanceEdit: React.FC<MaintenanceEditProps> = ({
                   </div>
                   
                   <div className="space-y-2">
-                    <Label htmlFor="quoteAccepted">Statut du devis</Label>
-                    <div className="flex items-center space-x-2 h-10 pl-3">
-                      <Switch 
-                        id="quoteAccepted" 
-                        checked={Boolean(formData.quoteAccepted)}
-                        onCheckedChange={(checked) => handleSwitchChange('quoteAccepted', checked)}
-                      />
-                      <Label htmlFor="quoteAccepted">
-                        {formData.quoteAccepted ? 'Accepté' : 'En attente'}
-                      </Label>
-                    </div>
+                    <Label htmlFor="quoteStatus">Statut du devis</Label>
+                    <Select
+                      value={formData.quoteStatus || 'pending'}
+                      onValueChange={(value) => handleSelectChange('quoteStatus', value as 'pending' | 'accepted' | 'rejected')}
+                    >
+                      <SelectTrigger id="quoteStatus">
+                        <SelectValue placeholder="Sélectionner un statut" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">En attente</SelectItem>
+                        <SelectItem value="accepted">Accepté</SelectItem>
+                        <SelectItem value="rejected">Refusé</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </>

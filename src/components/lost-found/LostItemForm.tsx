@@ -14,6 +14,7 @@ import { getUsers, getUsersByHotel } from '@/lib/db/users';
 import { useDate } from '@/hooks/use-date';
 import { useToast } from '@/hooks/use-toast';
 import { supabase, uploadToSupabase, isDataUrl, dataUrlToFile, deleteFromSupabase } from '@/lib/supabase';
+import PhotoDisplay from '@/components/maintenance/PhotoDisplay';
 
 interface LostItemFormProps {
   isOpen: boolean;
@@ -38,7 +39,6 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
     if (isEditing && lostItem) {
       return {
         ...lostItem,
-        photo: null,
         photoPreview: lostItem.photoUrl || ''
       };
     } else {
@@ -54,9 +54,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
         storageLocation: '',
         status: 'conservé',
         returnedTo: '',
-        returnDate: '',
-        photo: null,
-        photoPreview: ''
+        returnDate: ''
       };
     }
   });
@@ -136,6 +134,7 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
 
       try {
         setLoadingLocations(true);
+        // Use getHotelLocations to get only locations for this specific hotel
         const locationsData = await getHotelLocations(formData.hotelId);
         setLocations(locationsData);
         
@@ -685,22 +684,12 @@ const LostItemForm: React.FC<LostItemFormProps> = ({
                   </div>
                 </div>
               ) : formData.photoPreview ? (
-                <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
-                  <img 
-                    src={formData.photoPreview} 
-                    alt="Aperçu" 
-                    className="w-full h-full object-contain"
-                  />
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    className="absolute top-2 right-2"
-                    onClick={handleDeletePhoto}
-                    disabled={saving}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
+                <PhotoDisplay 
+                  photoUrl={formData.photoPreview}
+                  type="before"
+                  onDelete={handleDeletePhoto}
+                  altText="Photo de l'objet trouvé"
+                />
               ) : (
                 <div className="flex items-center justify-center w-full">
                   <label className="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 dark:hover:bg-bray-800 dark:bg-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:hover:border-gray-500 dark:hover:bg-gray-600">

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/utils';
-import { getHotelName, getParameterLabel, getUserName } from '@/lib/data';
 import { 
   Building, 
   Phone, 
@@ -20,7 +19,8 @@ import {
   FileText,
   Edit,
   Trash2,
-  History
+  History,
+  Clock8
 } from 'lucide-react';
 import { Maintenance } from './types/maintenance.types';
 import { useToast } from '@/hooks/use-toast';
@@ -28,6 +28,15 @@ import { getCurrentUser } from '@/lib/auth';
 import { deleteMaintenanceRequest } from '@/lib/db/maintenance';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import MaintenanceEdit from './MaintenanceEdit';
+import QuoteFileDisplay from './QuoteFileDisplay';
+import PhotoDisplay from './PhotoDisplay';
+
+// Import DB helper functions
+import { getHotelName } from '@/lib/db/hotels';
+import { getLocationLabel } from '@/lib/db/parameters-locations';
+import { getInterventionTypeLabel } from '@/lib/db/parameters-intervention-type';
+import { getStatusLabel } from '@/lib/db/parameters-status';
+import { getUserName } from '@/lib/db/users';
 
 interface MaintenanceDialogProps {
   maintenance: Maintenance | null;
@@ -49,6 +58,7 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [userNames, setUserNames] = useState<{[key: string]: string}>({});
+  const [resolvedLabels, setResolvedLabels] = useState<{[key: string]: string}>({});
   const { toast } = useToast();
   const currentUser = getCurrentUser();
   const isAdmin = currentUser?.role === 'admin';
@@ -70,7 +80,12 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
 
       // Load names for all user IDs
       for (const userId of userIds) {
-        names[userId] = await getUserName(userId);
+        try {
+          names[userId] = await getUserName(userId);
+        } catch (error) {
+          console.error(`Error loading user name for ID ${userId}:`, error);
+          names[userId] = 'Utilisateur inconnu';
+        }
       }
 
       setUserNames(prev => ({ ...prev, ...names }));
@@ -78,6 +93,55 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
 
     loadUserNames();
   }, [maintenance, userNames]);
+
+  // Load labels when maintenance changes
+  useEffect(() => {
+    if (!maintenance) return;
+
+    const loadLabels = async () => {
+      try {
+        const labels: {[key: string]: string} = {};
+
+        // Load hotel name
+        if (maintenance.hotelId) {
+          labels.hotelName = await getHotelName(maintenance.hotelId);
+        }
+
+        // Load location label
+        if (maintenance.locationId) {
+          labels.locationLabel = await getLocationLabel(maintenance.locationId);
+        }
+
+        // Load intervention type label
+        if (maintenance.interventionTypeId) {
+          labels.interventionTypeLabel = await getInterventionTypeLabel(maintenance.interventionTypeId);
+        }
+
+        // Load status label
+        if (maintenance.statusId) {
+          labels.statusLabel = await getStatusLabel(maintenance.statusId);
+        }
+
+        // Load received by name
+        if (maintenance.receivedById) {
+          labels.receivedByName = await getUserName(maintenance.receivedById);
+        }
+
+        // Load technician name
+        if (maintenance.technicianId) {
+          labels.technicianName = await getUserName(maintenance.technicianId);
+        }
+
+        setResolvedLabels(labels);
+      } catch (error) {
+        console.error('Error loading labels:', error);
+      }
+    };
+
+    loadLabels();
+  }, [maintenance]);
+
+  if (!maintenance) return null;
 
   // Handle delete maintenance
   const handleDelete = async () => {
@@ -106,8 +170,6 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
       setIsDeleting(false);
     }
   };
-
-  if (!maintenance) return null;
 
   // Format history entries for display
   const formatHistoryEntry = (entry: any) => {
@@ -180,6 +242,9 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                 case 'quoteUrl':
                   fieldLabel = 'Devis';
                   break;
+                case 'quoteStatus':
+                  fieldLabel = 'Statut du devis';
+                  break;
               }
               
               return (
@@ -217,6 +282,35 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
     );
   }
 
+  // Helper function to render quote status badge
+  const renderQuoteStatusBadge = () => {
+    if (maintenance.quoteStatus === 'accepted' || (maintenance.quoteAccepted === true)) {
+      return (
+        <div className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-green-50 text-green-600 border-green-200">
+          <Check className="h-3 w-3 mr-1" /> Devis accepté
+        </div>
+      );
+    } else if (maintenance.quoteStatus === 'rejected') {
+      return (
+        <div className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-red-50 text-red-600 border-red-200">
+          <X className="h-3 w-3 mr-1" /> Devis refusé
+        </div>
+      );
+    } else if (maintenance.quoteAccepted === false) {
+      return (
+        <div className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-red-50 text-red-600 border-red-200">
+          <X className="h-3 w-3 mr-1" /> Devis refusé
+        </div>
+      );
+    } else {
+      return (
+        <div className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-orange-50 text-orange-600 border-orange-200">
+          <Clock8 className="h-3 w-3 mr-1" /> Devis en attente
+        </div>
+      );
+    }
+  };
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
@@ -244,7 +338,7 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                   maintenance.statusId === 'stat4' ? "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-gray-50 text-gray-600 border-gray-300" :
                   "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold bg-red-50 text-red-600 border-red-300"
                 }>
-                  {getParameterLabel(maintenance.statusId)}
+                  {resolvedLabels.statusLabel || 'Chargement...'}
                 </span>
               </div>
             </div>
@@ -273,21 +367,21 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                 <p className="text-sm font-medium text-muted-foreground">Hôtel</p>
                 <div className="flex items-center">
                   <Building className="h-4 w-4 mr-1 text-muted-foreground" />
-                  <p className="font-medium">{getHotelName(maintenance.hotelId)}</p>
+                  <p className="font-medium">{resolvedLabels.hotelName || 'Chargement...'}</p>
                 </div>
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-medium text-muted-foreground">Lieu</p>
                 <div className="flex items-center">
                   <MapPin className="h-4 w-4 mr-1 text-muted-foreground" />
-                  <p className="font-medium">{getParameterLabel(maintenance.locationId)}</p>
+                  <p className="font-medium">{resolvedLabels.locationLabel || 'Chargement...'}</p>
                 </div>
               </div>
             </div>
             
             <div className="space-y-1">
               <p className="text-sm font-medium text-muted-foreground">Type d'intervention</p>
-              <p className="font-medium">{getParameterLabel(maintenance.interventionTypeId)}</p>
+              <p className="font-medium">{resolvedLabels.interventionTypeLabel || 'Chargement...'}</p>
             </div>
             
             <div className="space-y-2">
@@ -306,30 +400,23 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                 Photos
               </h3>
               
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {maintenance.photoBefore && (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-muted-foreground">Avant</p>
-                    <div className="h-40 w-full border rounded bg-slate-100 flex items-center justify-center overflow-hidden">
-                      <img 
-                        src={maintenance.photoBefore} 
-                        alt="Photo avant" 
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                  </div>
+                  <PhotoDisplay 
+                    photoUrl={maintenance.photoBefore}
+                    type="before"
+                    altText="Photo du problème"
+                    isEditable={false}
+                  />
                 )}
+                
                 {maintenance.photoAfter && (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-muted-foreground">Après</p>
-                    <div className="h-40 w-full border rounded bg-slate-100 flex items-center justify-center overflow-hidden">
-                      <img 
-                        src={maintenance.photoAfter} 
-                        alt="Photo après" 
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                  </div>
+                  <PhotoDisplay 
+                    photoUrl={maintenance.photoAfter}
+                    type="after"
+                    altText="Photo après résolution"
+                    isEditable={false}
+                  />
                 )}
               </div>
             </div>
@@ -344,55 +431,47 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
               </h3>
               
               {maintenance.quoteUrl && (
-                <div className="bg-amber-50 border border-amber-200 rounded-md p-4 flex flex-col space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="font-medium">Devis</h4>
-                      <p className="text-sm text-amber-800">
-                        Un devis a été fourni pour cette intervention
-                      </p>
+                <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-medium">Devis</h4>
+                        <p className="text-sm text-amber-800">
+                          Un devis a été fourni pour cette intervention
+                        </p>
+                      </div>
+                      <QuoteFileDisplay 
+                        quoteUrl={maintenance.quoteUrl} 
+                        isEditable={false} 
+                      />
                     </div>
-                    <Button variant="outline" size="sm">
-                      <FileText className="h-4 w-4 mr-1" />
-                      Voir le devis
-                    </Button>
-                  </div>
-                  
-                  {maintenance.quoteAmount && (
-                    <div className="flex items-center space-x-2">
-                      <p className="text-sm font-medium text-amber-800">Montant du devis:</p>
-                      <p className="text-sm font-bold text-amber-800">{maintenance.quoteAmount} €</p>
-                    </div>
-                  )}
-                  
-                  {maintenance.quoteAccepted !== undefined && (
+                    
+                    {maintenance.quoteAmount && (
+                      <div className="flex items-center space-x-2">
+                        <p className="text-sm font-medium text-amber-800">Montant du devis:</p>
+                        <p className="text-sm font-bold text-amber-800">{maintenance.quoteAmount} €</p>
+                      </div>
+                    )}
+                    
                     <div className="flex items-center space-x-2">
                       <p className="text-sm font-medium text-amber-800">Statut:</p>
-                      <div className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
-                        maintenance.quoteAccepted 
-                          ? "bg-green-50 text-green-600 border-green-200" 
-                          : "bg-red-50 text-red-600 border-red-200"
-                      }`}>
-                        {maintenance.quoteAccepted 
-                          ? <><Check className="h-3 w-3 mr-1" /> Devis accepté</> 
-                          : <><X className="h-3 w-3 mr-1" /> Devis refusé</>}
+                      {renderQuoteStatusBadge()}
+                    </div>
+                    
+                    {(maintenance.quoteStatus === 'accepted' || maintenance.quoteAccepted === true) && maintenance.quoteAcceptedDate && (
+                      <div className="flex items-center space-x-2">
+                        <p className="text-sm font-medium text-amber-800">Date d'acceptation:</p>
+                        <p className="text-sm text-amber-800">{formatDate(maintenance.quoteAcceptedDate)}</p>
                       </div>
-                    </div>
-                  )}
-                  
-                  {maintenance.quoteAccepted && maintenance.quoteAcceptedDate && (
-                    <div className="flex items-center space-x-2">
-                      <p className="text-sm font-medium text-amber-800">Date d'acceptation:</p>
-                      <p className="text-sm text-amber-800">{formatDate(maintenance.quoteAcceptedDate)}</p>
-                    </div>
-                  )}
-                  
-                  {maintenance.quoteAccepted && maintenance.quoteAcceptedById && (
-                    <div className="flex items-center space-x-2">
-                      <p className="text-sm font-medium text-amber-800">Accepté par:</p>
-                      <p className="text-sm text-amber-800">{getUserName(maintenance.quoteAcceptedById)}</p>
-                    </div>
-                  )}
+                    )}
+                    
+                    {(maintenance.quoteStatus === 'accepted' || maintenance.quoteAccepted === true) && maintenance.quoteAcceptedById && (
+                      <div className="flex items-center space-x-2">
+                        <p className="text-sm font-medium text-amber-800">Accepté par:</p>
+                        <p className="text-sm text-amber-800">{maintenance.quoteAcceptedById ? (resolvedLabels.quoteAcceptedByName || 'Chargement...') : '-'}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
               
@@ -425,7 +504,7 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                 <p className="text-sm font-medium text-muted-foreground">Reçu par</p>
                 <div className="flex items-center">
                   <User className="h-4 w-4 mr-1 text-slate-400" />
-                  <p className="font-medium">{getUserName(maintenance.receivedById)}</p>
+                  <p className="font-medium">{resolvedLabels.receivedByName || 'Chargement...'}</p>
                 </div>
               </div>
               <div className="space-y-1">
@@ -434,7 +513,7 @@ const MaintenanceDialog: React.FC<MaintenanceDialogProps> = ({
                   {maintenance.technicianId 
                     ? <div className="flex items-center">
                         <User className="h-4 w-4 mr-1 text-slate-400" />
-                        <span>{getUserName(maintenance.technicianId)}</span>
+                        <span>{resolvedLabels.technicianName || 'Chargement...'}</span>
                       </div>
                     : "Non assigné"}
                 </p>

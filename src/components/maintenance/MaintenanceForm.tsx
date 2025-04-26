@@ -15,6 +15,8 @@ import { getUsers } from '@/lib/db/users';
 import { getCurrentUser } from '@/lib/auth';
 import { useToast } from '@/hooks/use-toast';
 import { deleteFromSupabase } from '@/lib/supabase';
+import QuoteFileDisplay from './QuoteFileDisplay';
+import PhotoDisplay from './PhotoDisplay';
 
 interface MaintenanceFormProps {
   isOpen: boolean;
@@ -50,14 +52,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         hotelId: currentUser?.role === 'standard' && currentUser?.hotels?.length === 1 ? currentUser.hotels[0] : '',
         locationId: '',
         interventionTypeId: '',
-        photoBefore: null,
-        photoBeforePreview: '',
-        photoAfter: null,
-        photoAfterPreview: '',
-        hasQuote: false,
-        quoteFile: null,
-        quoteAmount: '',
-        quoteAccepted: false,
+        description: '',
         statusId: '',
         receivedById: currentUser?.id || '',
         technicianId: null,
@@ -66,7 +61,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         startDate: '',
         endDate: '',
         comments: '',
-        description: ''
+        quoteStatus: 'pending'
       };
     }
   });
@@ -82,6 +77,23 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
   const [formErrors, setFormErrors] = useState<{[key: string]: string}>({});
   const [photoBeforeUploading, setPhotoBeforeUploading] = useState(false);
   const [photoAfterUploading, setPhotoAfterUploading] = useState(false);
+
+  // Initialize the quote status from legacy data if needed
+  useEffect(() => {
+    if (isEditing && maintenance && !formData.quoteStatus) {
+      if (maintenance.quoteAccepted !== undefined) {
+        setFormData(prev => ({
+          ...prev,
+          quoteStatus: maintenance.quoteAccepted ? 'accepted' : 'rejected'
+        }));
+      } else if (maintenance.quoteUrl) {
+        setFormData(prev => ({
+          ...prev,
+          quoteStatus: 'pending'
+        }));
+      }
+    }
+  }, [isEditing, maintenance, formData.quoteStatus]);
 
   // Load all data on mount
   useEffect(() => {
@@ -140,7 +152,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
 
       try {
         setLoadingLocations(true);
-        // Use getHotelLocations to get locations specific to this hotel
         const locationsData = await getHotelLocations(formData.hotelId);
         setLocations(locationsData);
         
@@ -223,7 +234,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         if (fileType === 'photoBefore') setPhotoBeforeUploading(true);
         else setPhotoAfterUploading(true);
         
-        // Validate image file size (2MB max)
+        // Validate file size (2MB max)
         if (file.size > 2 * 1024 * 1024) {
           toast({
             title: "Fichier trop volumineux",
@@ -254,16 +265,12 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
             [fileType]: file,
             [`${fileType}Preview`]: reader.result as string
           }));
-          
-          // Clear uploading state
           if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
           else setPhotoAfterUploading(false);
         };
         reader.onerror = () => {
-          // Clear uploading state
           if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
           else setPhotoAfterUploading(false);
-          
           toast({
             title: "Erreur de lecture",
             description: "Impossible de lire le fichier sélectionné",
@@ -282,16 +289,30 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
           return;
         }
         
+        // Accept common document formats
+        const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+        if (!allowedTypes.includes(file.type) && !file.name.endsWith('.pdf') && !file.name.endsWith('.doc') && !file.name.endsWith('.docx')) {
+          toast({
+            title: "Format de fichier incorrect",
+            description: "Veuillez sélectionner un fichier de type PDF, DOC ou DOCX",
+            variant: "destructive",
+          });
+          return;
+        }
+        
         setFormData(prev => ({
           ...prev,
           quoteFile: file
         }));
+        
+        toast({
+          title: "Fichier ajouté",
+          description: `Le fichier ${file.name} a été ajouté avec succès`
+        });
       }
     } catch (error) {
-      // Clear uploading states
       if (fileType === 'photoBefore') setPhotoBeforeUploading(false);
       else if (fileType === 'photoAfter') setPhotoAfterUploading(false);
-      
       console.error('Error handling file upload:', error);
       toast({
         title: "Erreur",
@@ -378,6 +399,46 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
       });
     }
   };
+  
+  // Handle delete quote file
+  const handleDeleteQuoteFile = async () => {
+    try {
+      // If we are in edit mode and have an existing quote URL, delete it from Supabase
+      if (isEditing && maintenance?.quoteUrl) {
+        console.log('🗑️ Deleting quoteUrl from Supabase:', maintenance.quoteUrl);
+        const success = await deleteFromSupabase(maintenance.quoteUrl);
+        if (success) {
+          console.log('✅ Quote file deleted successfully from Supabase');
+          toast({
+            title: "Devis supprimé",
+            description: "Le fichier de devis a été supprimé avec succès",
+          });
+        } else {
+          console.error('❌ Failed to delete quote from Supabase');
+          toast({
+            title: "Avertissement",
+            description: "Le devis a été retiré du formulaire mais peut-être pas du stockage",
+            variant: "destructive",
+          });
+        }
+      }
+      
+      // Update form data to remove quote references
+      setFormData(prev => ({
+        ...prev,
+        quoteFile: null,
+        quoteUrl: null,
+        hasQuote: false
+      }));
+    } catch (error) {
+      console.error('Error deleting quote file:', error);
+      toast({
+        title: "Erreur",
+        description: "Une erreur est survenue lors de la suppression du devis",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Filter hotels based on user role
   const filteredHotels = currentUser?.role === 'admin' 
@@ -386,42 +447,37 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
 
   // Validate form before submission
   const validateForm = () => {
-    const newErrors: {[key: string]: string} = {};
-    
     if (!formData.hotelId) {
-      newErrors.hotelId = "Veuillez sélectionner un hôtel";
+      return { valid: false, message: "Veuillez sélectionner un hôtel" };
     }
     if (!formData.locationId) {
-      newErrors.locationId = "Veuillez sélectionner un lieu";
+      return { valid: false, message: "Veuillez sélectionner un lieu" };
     }
     if (!formData.interventionTypeId) {
-      newErrors.interventionTypeId = "Veuillez sélectionner un type d'intervention";
+      return { valid: false, message: "Veuillez sélectionner un type d'intervention" };
     }
     if (!formData.description || formData.description.trim().length < 10) {
-      newErrors.description = "La description doit contenir au moins 10 caractères";
+      return { valid: false, message: "La description doit contenir au moins 10 caractères" };
     }
     
     // Additional validation for edit mode
     if (isEditing) {
       if (!formData.statusId) {
-        newErrors.statusId = "Veuillez sélectionner un statut";
+        return { valid: false, message: "Veuillez sélectionner un statut" };
       }
     }
     
-    setFormErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    return { valid: true, message: "" };
   };
 
   // Handle form submission
   const handleSubmit = async () => {
-    console.log("Submit button clicked");
-    
     // Validate the form
-    const isValid = validateForm();
-    if (!isValid) {
+    const validation = validateForm();
+    if (!validation.valid) {
       toast({
         title: "Validation échouée",
-        description: "Veuillez corriger les erreurs dans le formulaire",
+        description: validation.message,
         variant: "destructive"
       });
       return;
@@ -429,7 +485,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
     
     try {
       setIsSubmitting(true);
-      console.log("Form submission started - setting isSubmitting to true");
       
       // For new interventions, set default status if not specified
       if (!isEditing && !formData.statusId) {
@@ -438,9 +493,7 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         formData.statusId = openStatus ? openStatus.id : statusParams[0]?.id;
       }
       
-      console.log("Submitting form data:", formData);
-      await onSubmit(formData); // Wait for submission to complete
-      console.log("Form submission completed successfully");
+      await onSubmit(formData);
       
     } catch (error) {
       console.error('Error submitting form:', error);
@@ -450,7 +503,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
         variant: "destructive"
       });
     } finally {
-      console.log("Setting isSubmitting to false");
       setIsSubmitting(false);
     }
   };
@@ -472,11 +524,13 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={isSubmitting ? undefined : onClose}>
+    <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {isEditing ? 'Modifier l\'intervention' : 'Nouvelle Intervention Technique'}
+            {isEditing 
+              ? 'Modifier l\'intervention' 
+              : 'Nouvelle Intervention Technique'}
           </DialogTitle>
           <DialogDescription>
             {isEditing 
@@ -533,7 +587,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                   )}
                 </SelectContent>
               </Select>
-              {formErrors.hotelId && <p className="text-xs text-red-500 mt-1">{formErrors.hotelId}</p>}
             </div>
             
             <div className="space-y-2">
@@ -558,7 +611,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                   )}
                 </SelectContent>
               </Select>
-              {formErrors.locationId && <p className="text-xs text-red-500 mt-1">{formErrors.locationId}</p>}
             </div>
           </div>
           
@@ -582,7 +634,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                 )}
               </SelectContent>
             </Select>
-            {formErrors.interventionTypeId && <p className="text-xs text-red-500 mt-1">{formErrors.interventionTypeId}</p>}
           </div>
           
           <div className="space-y-2">
@@ -596,107 +647,84 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
               onChange={handleFormChange}
               disabled={isSubmitting}
             />
-            {formErrors.description && <p className="text-xs text-red-500 mt-1">{formErrors.description}</p>}
           </div>
           
+          {/* Photo avant */}
           <div className="space-y-2">
             <Label htmlFor="photoBefore">Photo du problème</Label>
-            <div className="mt-2">
-              {photoBeforeUploading ? (
-                <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
-                  <div className="text-center">
-                    <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
-                    <p className="text-sm text-slate-500">Traitement de l'image...</p>
+            {photoBeforeUploading ? (
+              <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                  <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                </div>
+              </div>
+            ) : formData.photoBeforePreview ? (
+              <PhotoDisplay 
+                photoUrl={formData.photoBeforePreview}
+                type="before"
+                onDelete={handleDeletePhotoBefore}
+                isEditable={true}
+              />
+            ) : (
+              <div className="flex items-center justify-center w-full">
+                <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <Image className="w-8 h-8 mb-3 text-gray-400" />
+                    <p className="mb-2 text-sm text-gray-500">
+                      <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
+                    </p>
+                    <p className="text-xs text-gray-500">PNG, JPG (MAX. 2MB)</p>
                   </div>
-                </div>
-              ) : formData.photoBeforePreview ? (
-                <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
-                  <img 
-                    src={formData.photoBeforePreview} 
-                    alt="Aperçu" 
-                    className="w-full h-full object-contain"
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={(e) => handleFileUpload(e, 'photoBefore')}
+                    disabled={isSubmitting || photoBeforeUploading}
                   />
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    className="absolute top-2 right-2"
-                    onClick={handleDeletePhotoBefore}
-                    disabled={isSubmitting}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center w-full">
-                  <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                      <Image className="w-8 h-8 mb-3 text-gray-400" />
-                      <p className="mb-2 text-sm text-gray-500">
-                        <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
-                      </p>
-                      <p className="text-xs text-gray-500">PNG, JPG (MAX. 2MB)</p>
-                    </div>
-                    <input 
-                      type="file" 
-                      className="hidden" 
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'photoBefore')}
-                      disabled={isSubmitting || photoBeforeUploading}
-                    />
-                  </label>
-                </div>
-              )}
-            </div>
+                </label>
+              </div>
+            )}
           </div>
           
+          {/* Photo après */}
           <div className="space-y-2">
             <Label htmlFor="photoAfter">Photo après résolution</Label>
-            <div className="mt-2">
-              {photoAfterUploading ? (
-                <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
-                  <div className="text-center">
-                    <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
-                    <p className="text-sm text-slate-500">Traitement de l'image...</p>
+            {photoAfterUploading ? (
+              <div className="flex items-center justify-center w-full h-48 bg-slate-100 rounded-md">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-brand-500" />
+                  <p className="text-sm text-slate-500">Traitement de l'image...</p>
+                </div>
+              </div>
+            ) : formData.photoAfterPreview ? (
+              <PhotoDisplay 
+                photoUrl={formData.photoAfterPreview}
+                type="after"
+                onDelete={handleDeletePhotoAfter}
+                isEditable={true}
+              />
+            ) : (
+              <div className="flex items-center justify-center w-full">
+                <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <Image className="w-8 h-8 mb-3 text-gray-400" />
+                    <p className="mb-2 text-sm text-gray-500">
+                      <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
+                    </p>
+                    <p className="text-xs text-gray-500">PNG, JPG (MAX. 2MB)</p>
                   </div>
-                </div>
-              ) : formData.photoAfterPreview ? (
-                <div className="relative w-full h-48 bg-slate-100 rounded-md overflow-hidden mb-2">
-                  <img 
-                    src={formData.photoAfterPreview} 
-                    alt="Aperçu après" 
-                    className="w-full h-full object-contain"
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={(e) => handleFileUpload(e, 'photoAfter')}
+                    disabled={isSubmitting || photoAfterUploading}
                   />
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    className="absolute top-2 right-2"
-                    onClick={handleDeletePhotoAfter}
-                    disabled={isSubmitting}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center w-full">
-                  <label className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                      <Image className="w-8 h-8 mb-3 text-gray-400" />
-                      <p className="mb-2 text-sm text-gray-500">
-                        <span className="font-semibold">Cliquez pour uploader</span> ou glissez-déposez
-                      </p>
-                      <p className="text-xs text-gray-500">PNG, JPG (MAX. 2MB)</p>
-                    </div>
-                    <input 
-                      type="file" 
-                      className="hidden" 
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'photoAfter')}
-                      disabled={isSubmitting || photoAfterUploading}
-                    />
-                  </label>
-                </div>
-              )}
-            </div>
+                </label>
+              </div>
+            )}
           </div>
           
           <div className="space-y-4 border-t pt-4">
@@ -704,7 +732,13 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
               <Switch 
                 id="hasQuote" 
                 checked={formData.hasQuote} 
-                onCheckedChange={(checked) => handleSwitchChange('hasQuote', checked)}
+                onCheckedChange={(checked) => {
+                  if (!checked && formData.quoteUrl) {
+                    handleDeleteQuoteFile();
+                  } else {
+                    handleSwitchChange('hasQuote', checked);
+                  }
+                }}
                 disabled={isSubmitting}
               />
               <Label htmlFor="hasQuote">Devis disponible</Label>
@@ -712,8 +746,19 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
             
             {formData.hasQuote && (
               <>
+                {/* Affichage du fichier de devis s'il existe déjà */}
+                {formData.quoteUrl && !formData.quoteFile && (
+                  <div className="mb-3">
+                    <QuoteFileDisplay 
+                      quoteUrl={formData.quoteUrl}
+                      onDelete={handleDeleteQuoteFile}
+                    />
+                  </div>
+                )}
+                
+                {/* Champ d'upload pour un nouveau fichier de devis */}
                 <div className="space-y-2">
-                  <Label htmlFor="quoteFile">Fichier du devis</Label>
+                  <Label htmlFor="quoteFile">Fichier du devis {formData.quoteUrl ? '(remplacer)' : ''}</Label>
                   <div className="flex items-center justify-center w-full">
                     <label className={`flex flex-col items-center justify-center w-full h-24 border-2 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <div className="flex flex-col items-center justify-center pt-5 pb-6">
@@ -721,20 +766,31 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                         <p className="text-sm text-gray-500">
                           <span className="font-semibold">Cliquez pour uploader le devis</span>
                         </p>
+                        <p className="text-xs text-gray-500">PDF, DOC, DOCX (MAX. 5MB)</p>
                       </div>
                       <input 
                         type="file" 
                         className="hidden" 
-                        accept=".pdf,.doc,.docx"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         onChange={(e) => handleFileUpload(e, 'quoteFile')}
                         disabled={isSubmitting}
                       />
                     </label>
                   </div>
                   {formData.quoteFile && (
-                    <p className="text-sm text-green-600">
-                      Fichier sélectionné: {formData.quoteFile.name}
-                    </p>
+                    <div className="flex justify-between items-center mt-2 p-2 bg-blue-50 rounded">
+                      <p className="text-sm text-blue-600">
+                        Fichier sélectionné: {formData.quoteFile.name} ({(formData.quoteFile.size / 1024).toFixed(0)} KB)
+                      </p>
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                        onClick={() => setFormData(prev => ({ ...prev, quoteFile: null }))}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
                   )}
                 </div>
                 
@@ -753,18 +809,21 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                   </div>
                   
                   <div className="space-y-2">
-                    <Label htmlFor="quoteAccepted">Statut du devis</Label>
-                    <div className="flex items-center space-x-2 h-10 pl-3">
-                      <Switch 
-                        id="quoteAccepted" 
-                        checked={formData.quoteAccepted} 
-                        onCheckedChange={(checked) => handleSwitchChange('quoteAccepted', checked)}
-                        disabled={isSubmitting}
-                      />
-                      <Label htmlFor="quoteAccepted">
-                        {formData.quoteAccepted ? 'Accepté' : 'En attente'}
-                      </Label>
-                    </div>
+                    <Label htmlFor="quoteStatus">Statut du devis</Label>
+                    <Select
+                      value={formData.quoteStatus || 'pending'}
+                      onValueChange={(value) => handleSelectChange('quoteStatus', value as 'pending' | 'accepted' | 'rejected')}
+                      disabled={isSubmitting}
+                    >
+                      <SelectTrigger id="quoteStatus">
+                        <SelectValue placeholder="Sélectionner un statut" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">En attente</SelectItem>
+                        <SelectItem value="accepted">Accepté</SelectItem>
+                        <SelectItem value="rejected">Refusé</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </>
@@ -814,7 +873,6 @@ const MaintenanceForm: React.FC<MaintenanceFormProps> = ({
                     )}
                   </SelectContent>
                 </Select>
-                {formErrors.statusId && <p className="text-xs text-red-500 mt-1">{formErrors.statusId}</p>}
               </div>
             </div>
             

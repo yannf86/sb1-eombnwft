@@ -19,7 +19,7 @@ export interface Maintenance {
   photoAfter?: string;
   quoteUrl?: string;
   quoteAmount?: number;
-  quoteAccepted?: boolean;
+  quoteStatus?: 'pending' | 'accepted' | 'rejected';  // Remplace quoteAccepted avec 3 états possibles
   quoteAcceptedDate?: string;
   quoteAcceptedById?: string;
   comments?: string;
@@ -33,6 +33,9 @@ export interface Maintenance {
     action: string;
     changes: any;
   }[];
+  // Champs temporaires pour le formulaire
+  photoBeforePreview?: string;
+  photoAfterPreview?: string;
 }
 
 export interface MaintenanceFormData {
@@ -45,7 +48,7 @@ export interface MaintenanceFormData {
   hasQuote: boolean;
   quoteFile: File | null;
   quoteAmount: string;
-  quoteAccepted: boolean;
+  quoteStatus: 'pending' | 'accepted' | 'rejected';
 }
 
 export interface MaintenanceFilters {

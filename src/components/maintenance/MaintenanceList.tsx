@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/utils';
+import { Image, FileUp, Check, X, Edit, Eye, Clock8 } from 'lucide-react';
+import { Maintenance } from './types/maintenance.types';
+
+// Import DB helper functions
 import { getHotelName } from '@/lib/db/hotels';
 import { getLocationLabel } from '@/lib/db/parameters-locations';
 import { getInterventionTypeLabel } from '@/lib/db/parameters-intervention-type';
 import { getStatusLabel } from '@/lib/db/parameters-status';
-import { Image, FileUp, Check, X, Edit, Eye } from 'lucide-react';
-import { Maintenance } from './types/maintenance.types';
 
 interface MaintenanceListProps {
   maintenanceRequests: Maintenance[];
@@ -153,7 +155,22 @@ const MaintenanceList: React.FC<MaintenanceListProps> = ({ maintenanceRequests, 
                         <FileUp className="h-3 w-3 mr-1" />
                         {request.quoteAmount ? `${request.quoteAmount}€` : 'Devis'}
                       </span>
-                      {request.quoteAccepted !== undefined && (
+                      {request.quoteStatus && (
+                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
+                          request.quoteStatus === 'accepted' 
+                            ? "bg-green-50 text-green-600 border-green-200" 
+                            : request.quoteStatus === 'rejected' 
+                            ? "bg-red-50 text-red-600 border-red-200" 
+                            : "bg-orange-50 text-orange-600 border-orange-200"
+                        }`}>
+                          {request.quoteStatus === 'accepted' 
+                            ? <><Check className="h-3 w-3 mr-1" /> Accepté</> 
+                            : request.quoteStatus === 'rejected' 
+                            ? <><X className="h-3 w-3 mr-1" /> Refusé</>
+                            : <><Clock8 className="h-3 w-3 mr-1" /> En attente</>}
+                        </span>
+                      )}
+                      {!request.quoteStatus && request.quoteAccepted !== undefined && (
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
                           request.quoteAccepted 
                             ? "bg-green-50 text-green-600 border-green-200" 

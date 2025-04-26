@@ -144,6 +144,11 @@ export const createMaintenanceRequest = async (data: Omit<Maintenance, 'id' | 'c
       // Ce n'est pas critique, on continue
     }
     
+    // If we have hasQuote but not quoteStatus, set default quoteStatus to pending
+    if (hasQuote && !payload.quoteStatus) {
+      payload.quoteStatus = 'pending';
+    }
+    
     // Create maintenance request in Firestore
     console.log('Creating maintenance request with payload', payload);
     const docRef = await addDoc(collection(db, 'maintenance'), payload);
@@ -365,12 +370,19 @@ export const updateMaintenanceRequest = async (id: string, data: Partial<Mainten
       
       payload.quoteUrl = null;
       payload.quoteAmount = null;
-      payload.quoteAccepted = false;
+      payload.quoteStatus = null;
       
       // Track these changes
       if (oldData.quoteUrl) changes['quoteUrl'] = { old: oldData.quoteUrl, new: null };
       if (oldData.quoteAmount) changes['quoteAmount'] = { old: oldData.quoteAmount, new: null };
-      if (oldData.quoteAccepted) changes['quoteAccepted'] = { old: oldData.quoteAccepted, new: false };
+      if (oldData.quoteStatus) changes['quoteStatus'] = { old: oldData.quoteStatus, new: null };
+    }
+    
+    // Handle compatibility with old quoteAccepted boolean field
+    if (payload.quoteStatus === 'accepted') {
+      payload.quoteAccepted = true;
+    } else if (payload.quoteStatus === 'rejected') {
+      payload.quoteAccepted = false;
     }
     
     // Create a history entry if there are changes
